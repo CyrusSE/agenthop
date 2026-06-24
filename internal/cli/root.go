@@ -9,15 +9,17 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/CyrusSE/agenthop/internal/debuglog"
 	"github.com/CyrusSE/agenthop/internal/index"
 	"github.com/CyrusSE/agenthop/internal/migrate"
 	"github.com/CyrusSE/agenthop/internal/provider"
 	"github.com/CyrusSE/agenthop/internal/registry"
+	"github.com/CyrusSE/agenthop/internal/util"
 	"github.com/CyrusSE/agenthop/internal/tui"
 	"github.com/spf13/cobra"
 )
 
-var version = "0.1.0"
+var version = "0.1.1"
 
 type App struct {
 	Registry *registry.Registry
@@ -60,25 +62,46 @@ func (a *App) Root() *cobra.Command {
 	root.AddCommand(a.providersCmd())
 	root.AddCommand(a.exportCmd())
 	root.AddCommand(a.importCmd())
+	root.AddCommand(a.resumeCmd())
 	root.AddCommand(a.tuiCmd())
 	return root
 }
 
-func (a *App) ensureIndex(ctx context.Context, providerFilter string) error {
-	_, err := index.UpdateIncremental(ctx, a.Registry, a.Index, providerFilter)
+func (a *App) ensureIndex(ctx context.Context, providerFilter string, refresh bool) error {
+	if !refresh {
+		counts, _ := a.Index.CountByProvider()
+		if providerFilter != "" {
+			if counts[registry.NormalizeID(providerFilter)] > 0 {
+				return nil
+			}
+		} else {
+			total := 0
+			for _, n := range counts {
+				total += n
+			}
+			if total > 0 {
+				return nil
+			}
+		}
+	}
+	start := time.Now()
+	n, err := index.UpdateIncremental(ctx, a.Registry, a.Index, registry.NormalizeID(providerFilter))
+	debuglog.Log("H1", "cli.ensureIndex", "index update", "run1", map[string]any{
+		"provider": providerFilter, "updated": n, "ms": time.Since(start).Milliseconds(), "refresh": refresh,
+	})
 	return err
 }
 
 func (a *App) listCmd() *cobra.Command {
 	var providerID, project string
 	var limit int
-	var asJSON bool
+	var asJSON, refresh bool
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List indexed sessions",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			if err := a.ensureIndex(ctx, providerID); err != nil {
+			if err := a.ensureIndex(ctx, providerID, refresh); err != nil {
 				return err
 			}
 			items, err := a.Index.List(index.ListOpts{
@@ -105,20 +128,21 @@ func (a *App) listCmd() *cobra.Command {
 	cmd.Flags().StringVar(&project, "project", "", "filter by project path substring")
 	cmd.Flags().IntVar(&limit, "limit", 50, "max results")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "JSON output")
+	cmd.Flags().BoolVar(&refresh, "refresh", false, "refresh index before listing")
 	return cmd
 }
 
 func (a *App) showCmd() *cobra.Command {
 	var from string
 	var limit int
-	var raw bool
+	var raw, refresh bool
 	cmd := &cobra.Command{
 		Use:   "show <session-id>",
 		Short: "Show session messages",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			if err := a.ensureIndex(ctx, from); err != nil {
+			if err := a.ensureIndex(ctx, from, refresh); err != nil {
 				return err
 			}
 			sm, p, err := migrate.ResolveSession(ctx, a.Registry, a.Index, args[0], from)
@@ -149,12 +173,13 @@ func (a *App) showCmd() *cobra.Command {
 	cmd.Flags().StringVar(&from, "provider", "", "source provider")
 	cmd.Flags().IntVar(&limit, "limit", 0, "show last N messages")
 	cmd.Flags().BoolVar(&raw, "raw", false, "do not truncate")
+	cmd.Flags().BoolVar(&refresh, "refresh", false, "refresh index before show")
 	return cmd
 }
 
 func (a *App) migrateCmd() *cobra.Command {
 	var to, from, project string
-	var dryRun, yes bool
+	var dryRun, yes, refresh bool
 	cmd := &cobra.Command{
 		Use:   "migrate <session-id>",
 		Short: "Migrate a session to another provider",
@@ -164,7 +189,7 @@ func (a *App) migrateCmd() *cobra.Command {
 				return fmt.Errorf("--to is required")
 			}
 			ctx := cmd.Context()
-			if err := a.ensureIndex(ctx, from); err != nil {
+			if err := a.ensureIndex(ctx, from, refresh); err != nil {
 				return err
 			}
 			if !yes && !dryRun {
@@ -203,6 +228,7 @@ func (a *App) migrateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&project, "project", "", "target project path")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "validate without writing")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip confirmation")
+	cmd.Flags().BoolVar(&refresh, "refresh", false, "refresh index before migrate")
 	return cmd
 }
 
@@ -270,7 +296,7 @@ func (a *App) providersCmd() *cobra.Command {
 				}
 				fmt.Printf("%-14s %-12s %s\n", p.ID(), status, p.DisplayName())
 				for _, ps := range p.DefaultPaths() {
-					fmt.Printf("    %s: %s\n", ps.Label, ps.Path)
+					fmt.Printf("    %s: %s\n", ps.Label, util.TildePath(ps.Path))
 				}
 			}
 			return nil
@@ -293,13 +319,14 @@ func (a *App) providersCmd() *cobra.Command {
 
 func (a *App) exportCmd() *cobra.Command {
 	var from, out string
+	var refresh bool
 	cmd := &cobra.Command{
 		Use:   "export <session-id>",
 		Short: "Export session to portable JSON",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			_ = a.ensureIndex(ctx, from)
+			_ = a.ensureIndex(ctx, from, refresh)
 			sm, p, err := migrate.ResolveSession(ctx, a.Registry, a.Index, args[0], from)
 			if err != nil {
 				return err
@@ -323,6 +350,7 @@ func (a *App) exportCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&from, "provider", "", "source provider")
 	cmd.Flags().StringVarP(&out, "output", "o", "", "output file")
+	cmd.Flags().BoolVar(&refresh, "refresh", false, "refresh index before export")
 	return cmd
 }
 

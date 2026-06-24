@@ -11,6 +11,15 @@ import (
 	"time"
 )
 
+// TildePath replaces the user home directory prefix with ~.
+func TildePath(p string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return p
+	}
+	return strings.Replace(p, home, "~", 1)
+}
+
 func EncodeClaudeProjectPath(absPath string) string {
 	abs, err := filepath.Abs(absPath)
 	if err != nil {
