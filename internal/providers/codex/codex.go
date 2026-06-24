@@ -75,6 +75,11 @@ func (p *Provider) Discover(ctx context.Context, opts provider.DiscoverOpts) ([]
 	return out, nil
 }
 
+// SummarizeFile returns a summary for a single rollout JSONL (used by tests and tooling).
+func (p *Provider) SummarizeFile(path string) (model.Summary, error) {
+	return p.summarizeFile(path)
+}
+
 func sessionIDFromRollout(path string) string {
 	base := filepath.Base(path)
 	base = strings.TrimSuffix(base, ".jsonl")
@@ -83,6 +88,151 @@ func sessionIDFromRollout(path string) string {
 		return parts[len(parts)-1]
 	}
 	return base
+}
+
+func codexPayload(row map[string]any) map[string]any {
+	if p, ok := row["payload"].(map[string]any); ok {
+		return p
+	}
+	return row
+}
+
+func codexSkipUserText(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return true
+	}
+	for _, prefix := range []string{
+		"<environment_context>",
+		"<skill>",
+		"# AGENTS.md",
+		"<INSTRUCTIONS>",
+		"<permissions instructions>",
+		"<collaboration_mode>",
+		"<skills_instructions>",
+		"Read HEARTBEAT.md",
+		"You are being used as the model planner",
+		"Sender (untrusted metadata)",
+		"The following is the Codex agent history",
+	} {
+		if strings.HasPrefix(text, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func codexTextFromContent(content any) string {
+	arr, ok := content.([]any)
+	if !ok {
+		return ""
+	}
+	var parts []string
+	for _, item := range arr {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		typ, _ := m["type"].(string)
+		if typ != "input_text" && typ != "output_text" {
+			continue
+		}
+		text, _ := m["text"].(string)
+		text = strings.TrimSpace(text)
+		if text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func codexApplyMeta(row map[string]any, id, project *string) {
+	if t, _ := row["type"].(string); t != "session_meta" {
+		return
+	}
+	p := codexPayload(row)
+	sid, _ := p["id"].(string)
+	if sid == "" {
+		sid, _ = p["session_id"].(string)
+	}
+	if sid == "" {
+		sid, _ = row["session_id"].(string)
+	}
+	if sid != "" {
+		*id = sid
+	}
+	if cwd, _ := row["cwd"].(string); cwd != "" {
+		*project = cwd
+	} else if cwd, _ := p["cwd"].(string); cwd != "" {
+		*project = cwd
+	}
+}
+
+func codexNoteUserText(text string, title *string, msgCount *int) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	*msgCount++
+	if *title == "" && !codexSkipUserText(text) {
+		*title = util.FirstUserSnippet(text, 80)
+	}
+}
+
+func codexApplyRow(row map[string]any, id, project, title *string, msgCount *int) {
+	codexApplyMeta(row, id, project)
+	switch t, _ := row["type"].(string); t {
+	case "event_msg":
+		if em, ok := row["event_msg"].(map[string]any); ok {
+			role, _ := em["role"].(string)
+			text, _ := em["message"].(string)
+			if role == "user" {
+				codexNoteUserText(text, title, msgCount)
+			} else if role == "assistant" {
+				if text != "" {
+					*msgCount++
+				}
+			}
+			return
+		}
+		p := codexPayload(row)
+		switch pt, _ := p["type"].(string); pt {
+		case "user_message":
+			codexNoteUserText(stringField(p, "message"), title, msgCount)
+		}
+	case "response_item":
+		p := codexPayload(row)
+		if mt, _ := p["type"].(string); mt != "message" {
+			return
+		}
+		role, _ := p["role"].(string)
+		text := codexTextFromContent(p["content"])
+		if role == "user" {
+			codexNoteUserText(text, title, msgCount)
+		} else if role == "assistant" && text != "" {
+			*msgCount++
+		}
+	}
+}
+
+func codexAppendMessage(conv *model.Conversation, seen map[string]bool, role, text string, ts time.Time) {
+	text = strings.TrimSpace(text)
+	if role != "user" && role != "assistant" || text == "" {
+		return
+	}
+	if role == "user" && codexSkipUserText(text) {
+		return
+	}
+	key := role + "|" + text
+	if seen[key] {
+		return
+	}
+	seen[key] = true
+	mrole := model.RoleUser
+	if role == "assistant" {
+		mrole = model.RoleAssistant
+	}
+	conv.Messages = append(conv.Messages, model.Message{Role: mrole, Content: text, Timestamp: ts})
 }
 
 func (p *Provider) summarizeFile(path string) (model.Summary, error) {
@@ -100,25 +250,7 @@ func (p *Provider) summarizeFile(path string) (model.Summary, error) {
 		if json.Unmarshal(line, &row) != nil {
 			return nil
 		}
-		if t, _ := row["type"].(string); t == "session_meta" {
-			if sid, _ := row["session_id"].(string); sid != "" {
-				id = sid
-			}
-			if cwd, _ := row["cwd"].(string); cwd != "" {
-				project = cwd
-			}
-			return nil
-		}
-		if em, ok := row["event_msg"].(map[string]any); ok {
-			role, _ := em["role"].(string)
-			if role != "user" && role != "assistant" {
-				return nil
-			}
-			msgCount++
-			if text, _ := em["message"].(string); text != "" && title == "" && role == "user" {
-				title = util.FirstUserSnippet(text, 80)
-			}
-		}
+		codexApplyRow(row, &id, &project, &title, &msgCount)
 		return nil
 	})
 	tail, _ := util.TailJSONLLines(path, 5)
@@ -138,7 +270,12 @@ func (p *Provider) summarizeFile(path string) (model.Summary, error) {
 		last = st.ModTime()
 	}
 	if title == "" {
-		title = "(no title)"
+		if project != "" {
+			title = util.FirstUserSnippet(util.TildePath(project), 80)
+		}
+		if title == "" {
+			title = "(no title)"
+		}
 	}
 	return model.Summary{
 		ID: id, Provider: ProviderID, ProjectPath: project, Title: title,
@@ -163,32 +300,32 @@ func (p *Provider) Load(ctx context.Context, ref provider.SessionRef) (*model.Co
 		if json.Unmarshal(line, &row) != nil {
 			return nil
 		}
-		if t, _ := row["type"].(string); t == "session_meta" {
-			if sid, _ := row["session_id"].(string); sid != "" {
-				conv.ID = sid
-			}
-			if cwd, _ := row["cwd"].(string); cwd != "" {
-				conv.ProjectPath = cwd
-			}
-			return nil
+		var id, project string
+		codexApplyMeta(row, &id, &project)
+		if id != "" {
+			conv.ID = id
+		}
+		if project != "" {
+			conv.ProjectPath = project
 		}
 		ts := util.ParseTime(stringField(row, "timestamp"))
 		if em, ok := row["event_msg"].(map[string]any); ok {
-			role, _ := em["role"].(string)
-			text, _ := em["message"].(string)
-			if role == "" || text == "" {
+			codexAppendMessage(conv, seen, stringField(em, "role"), stringField(em, "message"), ts)
+			return nil
+		}
+		switch t, _ := row["type"].(string); t {
+		case "event_msg":
+			p := codexPayload(row)
+			if pt, _ := p["type"].(string); pt == "user_message" {
+				codexAppendMessage(conv, seen, "user", stringField(p, "message"), ts)
+			}
+		case "response_item":
+			p := codexPayload(row)
+			if mt, _ := p["type"].(string); mt != "message" {
 				return nil
 			}
-			key := role + "|" + text
-			if seen[key] {
-				return nil
-			}
-			seen[key] = true
-			mrole := model.RoleUser
-			if role == "assistant" {
-				mrole = model.RoleAssistant
-			}
-			conv.Messages = append(conv.Messages, model.Message{Role: mrole, Content: text, Timestamp: ts})
+			role, _ := p["role"].(string)
+			codexAppendMessage(conv, seen, role, codexTextFromContent(p["content"]), ts)
 		}
 		return nil
 	})
@@ -199,7 +336,7 @@ func (p *Provider) Load(ctx context.Context, ref provider.SessionRef) (*model.Co
 	conv.CreatedAt = conv.Messages[0].Timestamp
 	conv.UpdatedAt = conv.Messages[len(conv.Messages)-1].Timestamp
 	for _, m := range conv.Messages {
-		if m.Role == model.RoleUser && m.PlainText() != "" {
+		if m.Role == model.RoleUser && m.PlainText() != "" && !codexSkipUserText(m.PlainText()) {
 			conv.Title = util.FirstUserSnippet(m.PlainText(), 80)
 			break
 		}

@@ -33,8 +33,9 @@ var (
 )
 
 const (
-	minPageSize = 50
-	maxPageSize = 500
+	minPageSize    = 50
+	maxPageSize    = 500
+	maxShowAllPage = 10000
 )
 
 func pageSizeForHeight(h int) int {
@@ -74,9 +75,11 @@ type sessionItem struct {
 }
 
 func (i sessionItem) Title() string {
-	title := truncate(i.summary.Title, 40)
-	if title == "" {
+	title := strings.TrimSpace(i.summary.Title)
+	if title == "" || title == "(no title)" {
 		title = "(untitled)"
+	} else {
+		title = truncate(title, 40)
 	}
 	rel := mutedStyle.Render(util.FormatRelative(i.summary.UpdatedAt))
 	return rel + "  " + title
@@ -180,6 +183,7 @@ type modelState struct {
 	cwdMode        bool
 	pageOffset     int
 	pageSize       int
+	showAllOnPage  bool
 	totalSessions  int
 	providerFilter string
 	cwd            string
@@ -292,10 +296,16 @@ func dispatchPageLoad(m modelState) (modelState, tea.Cmd) {
 }
 
 func listOptsFor(m modelState) index.ListOpts {
+	limit := m.pageSize
+	offset := m.pageOffset
+	if m.showAllOnPage {
+		limit = maxShowAllPage
+		offset = 0
+	}
 	opts := index.ListOpts{
 		Provider: m.providerFilter,
-		Limit:    m.pageSize,
-		Offset:   m.pageOffset,
+		Limit:    limit,
+		Offset:   offset,
 	}
 	if m.cwdMode && m.cwd != "" {
 		opts.ProjectCWD = m.cwd
@@ -308,13 +318,14 @@ func loadSessionsPageCmd(m modelState, gen uint64) tea.Cmd {
 	opts := listOptsFor(m)
 	cwdMode := m.cwdMode
 	providerFilter := m.providerFilter
-	offset := m.pageOffset
+	showAll := m.showAllOnPage
+	offset := opts.Offset
 	return func() tea.Msg {
 		total, err := idx.Count(opts)
 		if err != nil {
 			return sessionsPageMsg{err: err, cwdMode: cwdMode, provider: providerFilter, offset: offset, gen: gen}
 		}
-		if offset >= total && total > 0 {
+		if !showAll && offset >= total && total > 0 {
 			ps := opts.Limit
 			if ps <= 0 {
 				ps = minPageSize
@@ -334,7 +345,7 @@ func loadSessionsPageCmd(m modelState, gen uint64) tea.Cmd {
 			})
 		}
 		return sessionsPageMsg{
-			items: sitems, total: total, offset: offset,
+			items: sitems, total: total, offset: opts.Offset,
 			cwdMode: cwdMode, provider: providerFilter, gen: gen, err: err,
 		}
 	}
@@ -541,8 +552,17 @@ func (m modelState) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, cmd
 			}
 			return m, nil
+		case "0":
+			if m.stage == stageSessions {
+				m.showAllOnPage = !m.showAllOnPage
+				m.pageOffset = 0
+				var cmd tea.Cmd
+				m, cmd = dispatchPageLoad(m)
+				return m, cmd
+			}
+			return m, nil
 		case "[", "pgup":
-			if m.stage == stageSessions && m.pageOffset >= m.pageSize {
+			if m.stage == stageSessions && !m.showAllOnPage && m.pageOffset >= m.pageSize {
 				m.pageOffset -= m.pageSize
 				var cmd tea.Cmd
 				m, cmd = dispatchPageLoad(m)
@@ -550,7 +570,7 @@ func (m modelState) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "]", "pgdown":
-			if m.stage == stageSessions && m.pageOffset+m.pageSize < m.totalSessions {
+			if m.stage == stageSessions && !m.showAllOnPage && m.pageOffset+m.pageSize < m.totalSessions {
 				m.pageOffset += m.pageSize
 				var cmd tea.Cmd
 				m, cmd = dispatchPageLoad(m)
@@ -692,11 +712,17 @@ func (m *modelState) updateStatusLine() {
 	if m.providerFilter != "" {
 		prov = registry.DisplayName(m.reg, m.providerFilter)
 	}
-	m.status = fmt.Sprintf("Showing %d–%d of %d (%s · %s)", start, end, m.totalSessions, filter, prov)
-	if m.totalSessions > m.pageSize {
+	m.status = fmt.Sprintf("Showing %d–%d of %d sessions · filter %s · agent %s", start, end, m.totalSessions, filter, prov)
+	if m.showAllOnPage {
+		if m.totalSessions > len(m.sessions.Items()) {
+			m.status += fmt.Sprintf(" · loaded %d (cap %d)", len(m.sessions.Items()), maxShowAllPage)
+		} else {
+			m.status += " · all on screen"
+		}
+	} else if m.totalSessions > m.pageSize {
 		page := m.pageOffset/m.pageSize + 1
 		pages := (m.totalSessions + m.pageSize - 1) / m.pageSize
-		m.status += fmt.Sprintf(" · page %d/%d · [/] more", page, pages)
+		m.status += fmt.Sprintf(" · %d/page · page %d/%d · 0 all · [/] page", m.pageSize, page, pages)
 	}
 	if m.indexing {
 		m.status += " · indexing…"
@@ -807,7 +833,7 @@ func (m modelState) footerHelp() string {
 	case stageProviders:
 		return "↑↓ pick agent · enter filter · esc back · q quit"
 	default:
-		return "↑↓ navigate · enter actions · w cwd · a all · [/] page · p agent · m migrate · r refresh · esc · q quit"
+		return "↑↓ navigate · enter actions · w cwd · a all projects · 0 show all sessions · [/] page · p agent · m migrate · r refresh · esc · q quit"
 	}
 }
 

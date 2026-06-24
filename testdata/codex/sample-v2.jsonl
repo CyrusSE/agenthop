@@ -1,0 +1,5 @@
+{"timestamp":"2026-03-18T22:16:21.186Z","type":"session_meta","payload":{"id":"019d0304-afe0-7001-b42e-69d2028e34d1","cwd":"/home/cyrus/Documents/demo"}}
+{"timestamp":"2026-03-18T22:16:21.187Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>/demo</cwd>\n</environment_context>"}]}}
+{"timestamp":"2026-03-18T22:16:22.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Fix the auth bug in login handler"}]}}
+{"timestamp":"2026-03-18T22:16:23.000Z","type":"event_msg","payload":{"type":"user_message","message":"Fix the auth bug in login handler","images":[]}}
+{"timestamp":"2026-03-18T22:16:24.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I'll inspect the login handler first."}]}}

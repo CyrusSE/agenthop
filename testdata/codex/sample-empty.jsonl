@@ -1,0 +1,2 @@
+{"timestamp":"2026-03-18T22:16:21.186Z","type":"session_meta","payload":{"id":"empty-session-001","cwd":"/home/cyrus/Documents/demo"}}
+{"timestamp":"2026-03-18T22:16:21.187Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>/demo</cwd>\n</environment_context>"}]}}
