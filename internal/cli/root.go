@@ -133,7 +133,7 @@ func (a *App) listCmd() *cobra.Command {
 	cmd.Flags().StringVar(&providerID, "provider", "", "filter by provider")
 	cmd.Flags().StringVar(&project, "project", "", "filter by project path substring")
 	cmd.Flags().BoolVar(&cwdOnly, "cwd", false, "only sessions for the current working directory")
-	cmd.Flags().IntVar(&limit, "limit", 50, "max results")
+	cmd.Flags().IntVar(&limit, "limit", 0, "max results (0 = unlimited)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "JSON output")
 	cmd.Flags().BoolVar(&refresh, "refresh", false, "refresh index before listing")
 	return cmd

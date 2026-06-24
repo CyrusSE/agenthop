@@ -73,7 +73,10 @@ agenthop
 # Sessions in the current directory (and subfolders)
 agenthop list --cwd
 
-# All indexed sessions
+# All indexed sessions (default: no limit)
+agenthop list
+
+# Cap output if you prefer
 agenthop list --limit 20
 
 # Preview a session
@@ -117,7 +120,7 @@ The default interface is a Codex-style **session browser**: one list for all age
 |-----|--------|
 | `Enter` | Open **actions** menu for the selected session |
 | `w` / `a` | Toggle **cwd** (this project tree) vs **all** sessions |
-| `[` / `]` | Previous / next page |
+| `[` / `]` | Previous / next page (status shows `page N/M` when more sessions exist) |
 | `p` | Filter by agent provider |
 | `m` | Migrate selected session |
 | `r` | Refresh index |

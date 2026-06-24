@@ -32,7 +32,24 @@ var (
 	chipMuted   = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Padding(0, 1)
 )
 
-const pageSize = 50
+const (
+	minPageSize = 50
+	maxPageSize = 500
+)
+
+func pageSizeForHeight(h int) int {
+	if h < 12 {
+		return minPageSize
+	}
+	n := h - 6
+	if n < minPageSize {
+		return minPageSize
+	}
+	if n > maxPageSize {
+		return maxPageSize
+	}
+	return n
+}
 
 const (
 	stageSessions = iota
@@ -121,13 +138,13 @@ func actionItems(reg *registry.Registry, sm model.Summary) []list.Item {
 }
 
 type sessionsPageMsg struct {
-	items      []list.Item
-	total      int
-	offset     int
-	cwdMode    bool
-	provider   string
-	gen        uint64
-	err        error
+	items    []list.Item
+	total    int
+	offset   int
+	cwdMode  bool
+	provider string
+	gen      uint64
+	err      error
 }
 type previewLoadedMsg struct {
 	content string
@@ -161,6 +178,7 @@ type modelState struct {
 	indexing       bool
 	cwdMode        bool
 	pageOffset     int
+	pageSize       int
 	totalSessions  int
 	providerFilter string
 	cwd            string
@@ -215,6 +233,7 @@ func Run(reg *registry.Registry, idx *index.Store, engine *migrate.Engine) error
 		providers: provList, sessions: sessList, actions: actionList, targets: targetList,
 		preview: vp, spinner: sp,
 		stage: stageSessions, cwdMode: cwdMode, cwd: cwd, indexing: true, pageGen: 1,
+		pageSize: 100,
 	}
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, runErr := p.Run()
@@ -260,7 +279,7 @@ func dispatchPageLoad(m modelState) (modelState, tea.Cmd) {
 func listOptsFor(m modelState) index.ListOpts {
 	opts := index.ListOpts{
 		Provider: m.providerFilter,
-		Limit:    pageSize,
+		Limit:    m.pageSize,
 		Offset:   m.pageOffset,
 	}
 	if m.cwdMode && m.cwd != "" {
@@ -281,7 +300,11 @@ func loadSessionsPageCmd(m modelState, gen uint64) tea.Cmd {
 			return sessionsPageMsg{err: err, cwdMode: cwdMode, provider: providerFilter, offset: offset, gen: gen}
 		}
 		if offset >= total && total > 0 {
-			offset = (total - 1) / pageSize * pageSize
+			ps := opts.Limit
+			if ps <= 0 {
+				ps = minPageSize
+			}
+			offset = (total - 1) / ps * ps
 			opts.Offset = offset
 		}
 		summaries, lerr := idx.List(opts)
@@ -367,6 +390,15 @@ func (m modelState) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		newPS := pageSizeForHeight(m.height)
+		if newPS != m.pageSize {
+			m.pageSize = newPS
+			m.pageOffset = 0
+			m.layout()
+			var cmd tea.Cmd
+			m, cmd = dispatchPageLoad(m)
+			return m, cmd
+		}
 		m.layout()
 		return m, nil
 	case sessionsPageMsg:
@@ -492,16 +524,16 @@ func (m modelState) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "[", "pgup":
-			if m.stage == stageSessions && m.pageOffset >= pageSize {
-				m.pageOffset -= pageSize
+			if m.stage == stageSessions && m.pageOffset >= m.pageSize {
+				m.pageOffset -= m.pageSize
 				var cmd tea.Cmd
 				m, cmd = dispatchPageLoad(m)
 				return m, cmd
 			}
 			return m, nil
 		case "]", "pgdown":
-			if m.stage == stageSessions && m.pageOffset+pageSize < m.totalSessions {
-				m.pageOffset += pageSize
+			if m.stage == stageSessions && m.pageOffset+m.pageSize < m.totalSessions {
+				m.pageOffset += m.pageSize
 				var cmd tea.Cmd
 				m, cmd = dispatchPageLoad(m)
 				return m, cmd
@@ -643,6 +675,11 @@ func (m *modelState) updateStatusLine() {
 		prov = registry.DisplayName(m.reg, m.providerFilter)
 	}
 	m.status = fmt.Sprintf("Showing %d–%d of %d (%s · %s)", start, end, m.totalSessions, filter, prov)
+	if m.totalSessions > m.pageSize {
+		page := m.pageOffset/m.pageSize + 1
+		pages := (m.totalSessions + m.pageSize - 1) / m.pageSize
+		m.status += fmt.Sprintf(" · page %d/%d · [/] more", page, pages)
+	}
 	if m.indexing {
 		m.status += " · indexing…"
 	}
