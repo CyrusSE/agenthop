@@ -2,6 +2,7 @@ package index_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -112,6 +113,41 @@ func TestGetAmbiguousSuffix(t *testing.T) {
 	_, err = store.Get("codex", "deadbeef")
 	if err == nil {
 		t.Fatal("expected ambiguous error")
+	}
+}
+
+func TestListPaginationAndProjectExact(t *testing.T) {
+	dir := t.TempDir()
+	store, err := index.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	now := time.Now()
+	paths := []string{"/proj/a", "/proj/b", "/other/c"}
+	for i, p := range paths {
+		if err := store.Upsert(model.Summary{
+			ID: fmt.Sprintf("id-%d", i), Provider: "codex", Title: p,
+			ProjectPath: p, UpdatedAt: now.Add(-time.Duration(i) * time.Hour),
+			StoragePath: "/tmp/" + p, SourceMtime: now.Unix(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	n, err := store.Count(index.ListOpts{ProjectExact: "/proj/a"})
+	if err != nil || n != 1 {
+		t.Fatalf("count exact: n=%d err=%v", n, err)
+	}
+
+	items, err := store.List(index.ListOpts{Limit: 2, Offset: 0})
+	if err != nil || len(items) != 2 {
+		t.Fatalf("page 0: %d err=%v", len(items), err)
+	}
+	items2, err := store.List(index.ListOpts{Limit: 2, Offset: 2})
+	if err != nil || len(items2) != 1 {
+		t.Fatalf("page 1: %d err=%v", len(items2), err)
 	}
 }
 

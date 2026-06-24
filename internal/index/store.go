@@ -13,6 +13,7 @@ import (
 	"github.com/CyrusSE/agenthop/internal/model"
 	"github.com/CyrusSE/agenthop/internal/provider"
 	"github.com/CyrusSE/agenthop/internal/registry"
+	"github.com/CyrusSE/agenthop/internal/util"
 	_ "modernc.org/sqlite"
 )
 
@@ -113,6 +114,9 @@ WHERE provider = ? AND origin_digest = ? LIMIT 1`, providerID, originDigest).Sca
 }
 
 func (s *Store) Upsert(summary model.Summary) error {
+	if summary.ProjectPath != "" {
+		summary.ProjectPath = util.NormalizeProjectPath(summary.ProjectPath)
+	}
 	_, err := s.db.Exec(`
 INSERT INTO sessions (id, provider, project_path, title, created_at, updated_at, message_count, storage_path, source_mtime)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -133,18 +137,29 @@ ON CONFLICT(provider, id) DO UPDATE SET
 type ListOpts struct {
 	Provider      string
 	ProjectFilter string
+	ProjectExact  string
 	Limit         int
+	Offset        int
 	Query         string
 }
 
-func (s *Store) List(opts ListOpts) ([]model.Summary, error) {
-	q := `SELECT id, provider, project_path, title, created_at, updated_at, message_count, storage_path, source_mtime FROM sessions WHERE 1=1`
+func (s *Store) listWhere(opts ListOpts) (string, []any) {
+	q := ` FROM sessions WHERE 1=1`
 	var args []any
 	if opts.Provider != "" {
 		q += ` AND provider = ?`
 		args = append(args, opts.Provider)
 	}
-	if opts.ProjectFilter != "" {
+	if opts.ProjectExact != "" {
+		norm := util.NormalizeProjectPath(opts.ProjectExact)
+		if norm == opts.ProjectExact {
+			q += ` AND project_path = ?`
+			args = append(args, norm)
+		} else {
+			q += ` AND (project_path = ? OR project_path = ?)`
+			args = append(args, norm, opts.ProjectExact)
+		}
+	} else if opts.ProjectFilter != "" {
 		q += ` AND project_path LIKE ?`
 		args = append(args, "%"+opts.ProjectFilter+"%")
 	}
@@ -153,9 +168,25 @@ func (s *Store) List(opts ListOpts) ([]model.Summary, error) {
 		like := "%" + opts.Query + "%"
 		args = append(args, like, like, like)
 	}
+	return q, args
+}
+
+func (s *Store) Count(opts ListOpts) (int, error) {
+	where, args := s.listWhere(opts)
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*)`+where, args...).Scan(&n)
+	return n, err
+}
+
+func (s *Store) List(opts ListOpts) ([]model.Summary, error) {
+	where, args := s.listWhere(opts)
+	q := `SELECT id, provider, project_path, title, created_at, updated_at, message_count, storage_path, source_mtime` + where
 	q += ` ORDER BY updated_at DESC`
 	if opts.Limit > 0 {
 		q += fmt.Sprintf(` LIMIT %d`, opts.Limit)
+	}
+	if opts.Offset > 0 {
+		q += fmt.Sprintf(` OFFSET %d`, opts.Offset)
 	}
 	rows, err := s.db.Query(q, args...)
 	if err != nil {

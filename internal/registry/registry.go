@@ -77,6 +77,15 @@ func (r *Registry) IDs() []string {
 	return ids
 }
 
+// DisplayName returns the human-readable provider name for an ID.
+func DisplayName(reg *Registry, id string) string {
+	id = NormalizeID(id)
+	if p, err := reg.Get(id); err == nil {
+		return p.DisplayName()
+	}
+	return id
+}
+
 func NormalizeID(id string) string {
 	id = strings.ToLower(strings.TrimSpace(id))
 	replacements := map[string]string{

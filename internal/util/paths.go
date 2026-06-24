@@ -11,6 +11,22 @@ import (
 	"time"
 )
 
+// NormalizeProjectPath cleans a project path and resolves symlinks when possible.
+func NormalizeProjectPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+	abs = filepath.Clean(abs)
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved
+	}
+	return abs
+}
+
 // TildePath replaces the user home directory prefix with ~.
 func TildePath(p string) string {
 	home, err := os.UserHomeDir()
