@@ -167,7 +167,10 @@ func (p *Provider) messageText(db *sql.DB, messageID string) string {
 			continue
 		}
 		var pd ocPartData
-		if json.Unmarshal([]byte(data), &pd) != nil || pd.Type != "text" || pd.Text == "" {
+		if json.Unmarshal([]byte(data), &pd) != nil || pd.Text == "" {
+			continue
+		}
+		if pd.Type != "text" && pd.Type != "reasoning" {
 			continue
 		}
 		parts = append(parts, pd.Text)
@@ -204,13 +207,18 @@ func (p *Provider) Write(ctx context.Context, conv *model.Conversation, opts pro
 	if err := p.ensureGlobalProject(db, now); err != nil {
 		return nil, err
 	}
+	tx, err := db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
 	meta := model.NewMigrationMeta(conv)
 	metaJSON, _ := json.Marshal(map[string]any{"agenthop_migration": meta})
 	slug := util.FirstUserSnippet(title, 20)
 	if slug == "" {
 		slug = "migrated"
 	}
-	_, err = db.Exec(`INSERT INTO session (
+	_, err = tx.Exec(`INSERT INTO session (
   id, project_id, directory, title, version, slug, time_created, time_updated, metadata, agent, model, cost,
   tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write
 ) VALUES (?, 'global', ?, ?, '1.15.13', ?, ?, ?, ?, 'build', '{"id":"claude-sonnet-4.6","providerID":"github-copilot"}', 0, 0, 0, 0, 0, 0)`,
@@ -225,22 +233,25 @@ func (p *Provider) Write(ctx context.Context, conv *model.Conversation, opts pro
 			ts = now
 		}
 		msgData, _ := json.Marshal(map[string]any{
-			"role": string(m.Role),
-			"time": map[string]any{"created": ts},
+			"role":    string(m.Role),
+			"time":    map[string]any{"created": ts},
 			"summary": map[string]any{"diffs": []any{}},
 		})
-		_, err = db.Exec(`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`,
+		_, err = tx.Exec(`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`,
 			msgID, sessionID, ts, ts, string(msgData))
 		if err != nil {
 			return nil, fmt.Errorf("insert message: %w", err)
 		}
 		partID := ocID("prt_")
 		partData, _ := json.Marshal(ocPartData{Type: "text", Text: m.PlainText()})
-		_, err = db.Exec(`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`,
+		_, err = tx.Exec(`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`,
 			partID, msgID, sessionID, ts, ts, string(partData))
 		if err != nil {
 			return nil, fmt.Errorf("insert part: %w", err)
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit session: %w", err)
 	}
 	return &provider.WriteResult{SessionID: sessionID, StoragePath: storagePath, ProjectPath: project}, nil
 }
@@ -251,7 +262,7 @@ func (p *Provider) ensureGlobalProject(db *sql.DB, now int64) error {
 	if n > 0 {
 		return nil
 	}
-	_, err := db.Exec(`INSERT INTO project (id, worktree, time_created, time_updated, sandboxes) VALUES ('global', '/', ?, ?, '[]')`, now, now)
+	_, err := db.Exec(`INSERT OR IGNORE INTO project (id, worktree, time_created, time_updated, sandboxes) VALUES ('global', '/', ?, ?, '[]')`, now, now)
 	return err
 }
 

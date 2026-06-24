@@ -71,6 +71,49 @@ func ReadJSONLLines(path string, maxLines int, fn func(line []byte) error) error
 	return sc.Err()
 }
 
+// ScanJSONLEdges checks the first headLines and trailing tailChunk bytes for a matching line.
+func ScanJSONLEdges(path string, headLines int, tailChunk int64, match func(line []byte) bool) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	for i := 0; i < headLines && sc.Scan(); i++ {
+		line := bytes.TrimSpace(sc.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		if match(line) {
+			return true
+		}
+	}
+	st, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	start := int64(0)
+	if st.Size() > tailChunk {
+		start = st.Size() - tailChunk
+	}
+	if _, err := f.Seek(start, io.SeekStart); err != nil {
+		return false
+	}
+	tailSc := bufio.NewScanner(f)
+	tailSc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	for tailSc.Scan() {
+		line := bytes.TrimSpace(tailSc.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		if match(line) {
+			return true
+		}
+	}
+	return false
+}
+
 func TailJSONLLines(path string, maxLines int) ([][]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {

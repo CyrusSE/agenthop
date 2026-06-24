@@ -2,6 +2,7 @@ package migrate
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,11 +50,23 @@ func FindExistingMigration(storagePath, originDigest string) (string, bool) {
 	return "", false
 }
 
+
+var errDigestFound = errors.New("migration digest found")
+
 func scanJSONLForDigest(path, originDigest string) (string, bool) {
+	match := func(line []byte) bool { return migrationDigest(line) == originDigest }
+	if util.ScanJSONLEdges(path, 25, 64*1024, match) {
+		return path, true
+	}
+	st, err := os.Stat(path)
+	if err != nil || st.Size() > 512*1024 {
+		return "", false
+	}
 	var found string
 	_ = util.ReadJSONLLines(path, 0, func(line []byte) error {
-		if migrationDigest(line) == originDigest {
+		if match(line) {
 			found = path
+			return errDigestFound
 		}
 		return nil
 	})

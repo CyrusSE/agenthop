@@ -61,6 +61,9 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 	}
 	if !opts.DryRun {
 		if existing, ok := FindDuplicate(e.Index, dst, conv); ok {
+			if e.Index != nil {
+				_ = e.Index.RecordMigration(dst.ID(), model.OriginDigest(conv), existing.SessionID, existing.StoragePath)
+			}
 			return &Result{
 				Source:        conv,
 				Write:         existing,
