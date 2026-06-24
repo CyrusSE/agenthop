@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,6 +90,23 @@ func (p *Provider) Discover(ctx context.Context, opts provider.DiscoverOpts) ([]
 	return out, nil
 }
 
+func cursorSkipTitleText(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return true
+	}
+	for _, prefix := range []string{
+		"<user_query>",
+		"<system_reminder>",
+		"<agent_transcripts>",
+	} {
+		if strings.HasPrefix(text, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *Provider) summarizeStore(path string) (model.Summary, error) {
 	st, err := os.Stat(path)
 	if err != nil {
@@ -139,32 +157,51 @@ func (p *Provider) summarizeTranscript(path string) (model.Summary, error) {
 		return model.Summary{}, err
 	}
 	id := strings.TrimSuffix(filepath.Base(path), ".jsonl")
-	encoded := strings.TrimPrefix(filepath.Base(filepath.Dir(filepath.Dir(path))), "home-")
-	project := util.DecodeClaudeProjectPath(strings.TrimPrefix(encoded, "home-"))
+	encoded := filepath.Base(filepath.Dir(filepath.Dir(path)))
+	project := util.DecodeCursorProjectPath(encoded)
 	var title string
 	var msgCount int
-	_ = util.ReadJSONLLines(path, 20, func(line []byte) error {
+	_ = util.ReadJSONLLines(path, 0, func(line []byte) error {
 		var row map[string]any
 		if json.Unmarshal(line, &row) != nil {
 			return nil
 		}
 		role, _ := row["role"].(string)
-		if role == "user" || role == "assistant" {
-			msgCount++
-		}
-		if title == "" && role == "user" {
+		if role == "" {
 			if msg, ok := row["message"].(map[string]any); ok {
-				if c, ok := msg["content"].([]any); ok && len(c) > 0 {
-					if part, ok := c[0].(map[string]any); ok {
-						if t, _ := part["text"].(string); t != "" {
-							title = util.FirstUserSnippet(t, 80)
-						}
-					}
-				}
+				role, _ = msg["role"].(string)
 			}
+		}
+		text := extractCursorMessage(row)
+		if role != "user" && role != "assistant" {
+			return nil
+		}
+		if text == "" {
+			return nil
+		}
+		msgCount++
+		if title == "" && role == "user" && !cursorSkipTitleText(text) {
+			title = util.FirstUserSnippet(text, 80)
 		}
 		return nil
 	})
+	if title == "" {
+		_ = util.ReadJSONLLines(path, 40, func(line []byte) error {
+			var row map[string]any
+			if json.Unmarshal(line, &row) != nil {
+				return nil
+			}
+			text := extractCursorMessage(row)
+			if text != "" && !cursorSkipTitleText(text) {
+				title = util.FirstUserSnippet(text, 80)
+				return io.EOF
+			}
+			return nil
+		})
+	}
+	if title == "" && project != "" {
+		title = util.FirstUserSnippet(util.TildePath(project), 80)
+	}
 	if title == "" {
 		title = "(transcript)"
 	}

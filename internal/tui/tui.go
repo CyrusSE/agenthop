@@ -15,6 +15,7 @@ import (
 	"github.com/CyrusSE/agenthop/internal/index"
 	"github.com/CyrusSE/agenthop/internal/migrate"
 	"github.com/CyrusSE/agenthop/internal/model"
+	"github.com/CyrusSE/agenthop/internal/config"
 	"github.com/CyrusSE/agenthop/internal/provider"
 	"github.com/CyrusSE/agenthop/internal/registry"
 	"github.com/CyrusSE/agenthop/internal/util"
@@ -76,8 +77,13 @@ type sessionItem struct {
 
 func (i sessionItem) Title() string {
 	title := strings.TrimSpace(i.summary.Title)
-	if title == "" || title == "(no title)" {
-		title = "(untitled)"
+	if title == "" || title == "(no title)" || title == "(transcript)" {
+		if i.summary.ProjectPath != "" {
+			title = util.FirstUserSnippet(util.TildePath(i.summary.ProjectPath), 40)
+		}
+		if title == "" {
+			title = "(untitled)"
+		}
 	} else {
 		title = truncate(title, 40)
 	}
@@ -202,6 +208,11 @@ func Run(reg *registry.Registry, idx *index.Store, engine *migrate.Engine) error
 		cwdMode = false
 	}
 	cwd = util.NormalizeProjectPath(cwd)
+	home := util.NormalizeProjectPath(config.HomeDir())
+	if cwdMode && home != "" && cwd == home {
+		// ~ matches every project path as a subtree; default to all projects instead.
+		cwdMode = false
+	}
 
 	counts, _ := idx.CountByProvider()
 	delegate := list.NewDefaultDelegate()
@@ -238,7 +249,7 @@ func Run(reg *registry.Registry, idx *index.Store, engine *migrate.Engine) error
 		providers: provList, sessions: sessList, actions: actionList, targets: targetList,
 		preview: vp, spinner: sp,
 		stage: stageSessions, cwdMode: cwdMode, cwd: cwd, indexing: true, pageGen: 1,
-		pageSize: 100,
+		pageSize: 100, showAllOnPage: true,
 	}
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, runErr := p.Run()
@@ -704,9 +715,9 @@ func (m *modelState) updateStatusLine() {
 		end = m.pageOffset
 		start = 0
 	}
-	filter := "all"
+	filter := "everywhere"
 	if m.cwdMode {
-		filter = "cwd"
+		filter = "here"
 	}
 	prov := "all agents"
 	if m.providerFilter != "" {
@@ -769,14 +780,14 @@ func (m *modelState) layout() {
 }
 
 func (m modelState) filterChips() string {
-	cwd := chipMuted.Render("cwd")
-	all := chipMuted.Render("all")
+	here := chipMuted.Render("here")
+	everywhere := chipMuted.Render("everywhere")
 	if m.cwdMode {
-		cwd = chipActive.Render("cwd")
+		here = chipActive.Render("here")
 	} else {
-		all = chipActive.Render("all")
+		everywhere = chipActive.Render("everywhere")
 	}
-	return cwd + " " + all
+	return here + " " + everywhere
 }
 
 func (m modelState) View() string {
@@ -833,7 +844,7 @@ func (m modelState) footerHelp() string {
 	case stageProviders:
 		return "↑↓ pick agent · enter filter · esc back · q quit"
 	default:
-		return "↑↓ navigate · enter actions · w cwd · a all projects · 0 show all sessions · [/] page · p agent · m migrate · r refresh · esc · q quit"
+		return "↑↓ navigate · enter actions · w this folder · a all projects · 0/[/] page · p agent · m migrate · r refresh · esc · q quit"
 	}
 }
 

@@ -54,6 +54,17 @@ func DecodeClaudeProjectPath(encoded string) string {
 	return strings.ReplaceAll(encoded, "-", string(filepath.Separator))
 }
 
+// DecodeCursorProjectPath decodes ~/.cursor/projects/home-cyrus-... directory names.
+func DecodeCursorProjectPath(encoded string) string {
+	if encoded == "" {
+		return ""
+	}
+	if strings.HasPrefix(encoded, "home-") {
+		return "/" + strings.ReplaceAll(encoded, "-", string(filepath.Separator))
+	}
+	return DecodeClaudeProjectPath(encoded)
+}
+
 func FileMtime(path string) (time.Time, error) {
 	st, err := os.Stat(path)
 	if err != nil {

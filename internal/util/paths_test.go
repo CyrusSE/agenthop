@@ -14,6 +14,14 @@ func TestEncodeClaudeProjectPath(t *testing.T) {
 	}
 }
 
+func TestDecodeCursorProjectPath(t *testing.T) {
+	got := util.DecodeCursorProjectPath("home-cyrus-Documents-test-miggrate")
+	want := "/home/cyrus/Documents/test/miggrate"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
 func TestMatchID(t *testing.T) {
 	id := "01234567-89ab-cdef-0123-456789abcdef"
 	if !util.MatchID(id, "89abcdef") {

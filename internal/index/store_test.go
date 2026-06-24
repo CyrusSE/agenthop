@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/CyrusSE/agenthop/internal/config"
 	"github.com/CyrusSE/agenthop/internal/index"
 	"github.com/CyrusSE/agenthop/internal/model"
 )
@@ -207,6 +208,44 @@ func TestListPaginationAndProjectExact(t *testing.T) {
 	items2, err := store.List(index.ListOpts{Limit: 2, Offset: 2})
 	if err != nil || len(items2) != 1 {
 		t.Fatalf("page 1: %d err=%v", len(items2), err)
+	}
+}
+
+func TestListProjectCWDAtHome(t *testing.T) {
+	dir := t.TempDir()
+	store, err := index.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	home := config.HomeDir()
+	if home == "" {
+		t.Skip("no home dir")
+	}
+	now := time.Now()
+	for _, row := range []struct {
+		id, path string
+	}{
+		{"home-only", home},
+		{"home-sub", filepath.Join(home, "proj")},
+		{"other", "/other"},
+	} {
+		if err := store.Upsert(model.Summary{
+			ID: row.id, Provider: "codex", ProjectPath: row.path,
+			UpdatedAt: now, StoragePath: "/tmp/" + row.id, SourceMtime: now.Unix(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := store.Count(index.ListOpts{ProjectCWD: home})
+	if err != nil || n != 1 {
+		t.Fatalf("home cwd should match exact path only: n=%d err=%v", n, err)
+	}
+	sub := filepath.Join(home, "proj")
+	n, err = store.Count(index.ListOpts{ProjectCWD: sub})
+	if err != nil || n != 1 {
+		t.Fatalf("subdir cwd should match exact subdir: n=%d err=%v", n, err)
 	}
 }
 
