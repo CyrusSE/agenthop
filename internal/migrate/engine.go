@@ -60,7 +60,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 		return nil, provider.ErrNotInstalled
 	}
 	if !opts.DryRun {
-		if existing, ok := FindDuplicate(dst, conv); ok {
+		if existing, ok := FindDuplicate(e.Index, dst, conv); ok {
 			return &Result{
 				Source:        conv,
 				Write:         existing,
@@ -78,6 +78,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 		return nil, fmt.Errorf("write: %w", err)
 	}
 	if !opts.DryRun && e.Index != nil {
+		_ = e.Index.RecordMigration(dst.ID(), model.OriginDigest(conv), write.SessionID, write.StoragePath)
 		_, _ = index.UpdateIncremental(ctx, e.Registry, e.Index, dst.ID())
 	}
 	return &Result{

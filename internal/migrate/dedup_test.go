@@ -7,9 +7,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/CyrusSE/agenthop/internal/index"
 	"github.com/CyrusSE/agenthop/internal/migrate"
 	"github.com/CyrusSE/agenthop/internal/model"
 	"github.com/CyrusSE/agenthop/internal/providers/codex"
+	"github.com/CyrusSE/agenthop/internal/providers/hermes"
 )
 
 func TestFindExistingMigration(t *testing.T) {
@@ -54,7 +56,7 @@ func TestFindDuplicateProvider(t *testing.T) {
 	}
 	t.Setenv("CODEX_HOME", dir)
 	p := codex.New()
-	wr, ok := migrate.FindDuplicate(p, conv)
+	wr, ok := migrate.FindDuplicate(nil, p, conv)
 	if !ok {
 		t.Fatal("expected duplicate")
 	}
@@ -62,6 +64,28 @@ func TestFindDuplicateProvider(t *testing.T) {
 		t.Fatalf("session id = %q", wr.SessionID)
 	}
 	_ = p
+}
+
+func TestFindDuplicateIndex(t *testing.T) {
+	dir := t.TempDir()
+	store, err := index.Open(filepath.Join(dir, "dedup.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	conv := &model.Conversation{
+		ID: "src-3", Provider: "claude-code",
+		Messages: []model.Message{{Role: model.RoleUser, Content: "indexed dedup"}},
+	}
+	digest := model.OriginDigest(conv)
+	_ = store.RecordMigration("hermes", digest, "hermes-ses-1", "/hermes/state.db#hermes-ses-1")
+	wr, ok := migrate.FindDuplicate(store, hermes.New(), conv)
+	if !ok {
+		t.Fatal("expected index duplicate")
+	}
+	if wr.SessionID != "hermes-ses-1" {
+		t.Fatalf("session id = %q", wr.SessionID)
+	}
 }
 
 func mustJSON(v any) string {
