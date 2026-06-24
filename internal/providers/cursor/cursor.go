@@ -73,11 +73,17 @@ func (p *Provider) Discover(ctx context.Context, opts provider.DiscoverOpts) ([]
 		if !strings.Contains(path, "agent-transcripts") {
 			return nil
 		}
+		if opts.Limit > 0 && len(out) >= opts.Limit {
+			return filepath.SkipAll
+		}
 		sm, err := p.summarizeTranscript(path)
 		if err != nil || sm.ID == "" {
 			return nil
 		}
 		out = append(out, sm)
+		if opts.Limit > 0 && len(out) >= opts.Limit {
+			return filepath.SkipAll
+		}
 		return nil
 	})
 	return out, nil
@@ -134,7 +140,7 @@ func (p *Provider) summarizeTranscript(path string) (model.Summary, error) {
 	}
 	id := strings.TrimSuffix(filepath.Base(path), ".jsonl")
 	encoded := strings.TrimPrefix(filepath.Base(filepath.Dir(filepath.Dir(path))), "home-")
-	project := strings.ReplaceAll(encoded, "-", "/")
+	project := util.DecodeClaudeProjectPath(strings.TrimPrefix(encoded, "home-"))
 	var title string
 	var msgCount int
 	_ = util.ReadJSONLLines(path, 20, func(line []byte) error {

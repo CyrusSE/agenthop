@@ -59,19 +59,17 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 	if !dst.Installed() {
 		return nil, provider.ErrNotInstalled
 	}
-	if !opts.DryRun {
-		if existing, ok := FindDuplicate(e.Index, dst, conv); ok {
-			if e.Index != nil {
-				_ = e.Index.RecordMigration(dst.ID(), model.OriginDigest(conv), existing.SessionID, existing.StoragePath)
-			}
-			return &Result{
-				Source:        conv,
-				Write:         existing,
-				Resume:        dst.ResumeCommand(*existing),
-				TargetName:    dst.DisplayName(),
-				AlreadyExists: true,
-			}, nil
+	if existing, ok := FindDuplicate(e.Index, dst, conv); ok {
+		if e.Index != nil && !opts.DryRun {
+			_ = e.Index.RecordMigration(dst.ID(), model.OriginDigest(conv), existing.SessionID, existing.StoragePath)
 		}
+		return &Result{
+			Source:        conv,
+			Write:         existing,
+			Resume:        dst.ResumeCommand(*existing),
+			TargetName:    dst.DisplayName(),
+			AlreadyExists: true,
+		}, nil
 	}
 	write, err := dst.Write(ctx, conv, provider.WriteOpts{
 		ProjectPath: opts.ProjectPath,

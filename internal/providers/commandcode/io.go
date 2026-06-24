@@ -56,7 +56,7 @@ func summarizeCCFile(path, providerID string) (model.Summary, error) {
 	}
 	id := strings.TrimSuffix(filepath.Base(path), ".jsonl")
 	encoded := filepath.Base(filepath.Dir(path))
-	project := strings.ReplaceAll(encoded, "-", "/")
+	project := util.DecodeClaudeProjectPath(encoded)
 	var title string
 	var msgCount int
 	var first, last time.Time

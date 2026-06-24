@@ -97,20 +97,20 @@ ON CONFLICT(provider, origin_digest) DO UPDATE SET
 }
 
 // FindMigration returns a prior migration target for the same origin digest.
-func (s *Store) FindMigration(providerID, originDigest string) (sessionID, storagePath string, ok bool) {
+func (s *Store) FindMigration(providerID, originDigest string) (sessionID, storagePath string, ok bool, err error) {
 	if originDigest == "" {
-		return "", "", false
+		return "", "", false, nil
 	}
-	err := s.db.QueryRow(`
+	err = s.db.QueryRow(`
 SELECT session_id, storage_path FROM migration_dedup
 WHERE provider = ? AND origin_digest = ? LIMIT 1`, providerID, originDigest).Scan(&sessionID, &storagePath)
 	if err == sql.ErrNoRows {
-		return "", "", false
+		return "", "", false, nil
 	}
 	if err != nil {
-		return "", "", false
+		return "", "", false, err
 	}
-	return sessionID, storagePath, true
+	return sessionID, storagePath, true, nil
 }
 
 func (s *Store) Upsert(summary model.Summary) error {
@@ -166,12 +166,12 @@ func (s *Store) listWhere(opts ListOpts) (string, []any) {
 			args = append(args, norm, opts.ProjectExact)
 		}
 	} else if opts.ProjectFilter != "" {
-		q += ` AND project_path LIKE ?`
-		args = append(args, "%"+opts.ProjectFilter+"%")
+		q += ` AND project_path LIKE ? ESCAPE '\'`
+		args = append(args, "%"+util.EscapeLike(opts.ProjectFilter)+"%")
 	}
 	if opts.Query != "" {
-		q += ` AND (id LIKE ? OR title LIKE ? OR project_path LIKE ?)`
-		like := "%" + opts.Query + "%"
+		q += ` AND (id LIKE ? ESCAPE '\' OR title LIKE ? ESCAPE '\' OR project_path LIKE ? ESCAPE '\')`
+		like := "%" + util.EscapeLike(opts.Query) + "%"
 		args = append(args, like, like, like)
 	}
 	return q, args
@@ -220,7 +220,7 @@ func (s *Store) Get(providerID, id string) (*model.Summary, error) {
 		return nil, provider.ErrNotFound
 	}
 	if sm, err := s.scanSummary(`SELECT id, provider, project_path, title, created_at, updated_at, message_count, storage_path, source_mtime
-FROM sessions WHERE provider = ? AND id = ? LIMIT 1`, providerID, id); err == nil {
+FROM sessions WHERE provider = ? AND id = ? ORDER BY updated_at DESC LIMIT 1`, providerID, id); err == nil {
 		return sm, nil
 	} else if err != provider.ErrNotFound {
 		return nil, err
@@ -231,32 +231,7 @@ FROM sessions WHERE provider = ? AND id LIKE ? ORDER BY updated_at DESC LIMIT 1`
 	} else if err != provider.ErrNotFound {
 		return nil, err
 	}
-	rows, err := s.db.Query(`
-SELECT id, provider, project_path, title, created_at, updated_at, message_count, storage_path, source_mtime
-FROM sessions WHERE provider = ? AND id LIKE ? ORDER BY updated_at DESC`, providerID, "%"+id)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var matches []model.Summary
-	for rows.Next() {
-		sm, err := s.scanSummaryRow(rows)
-		if err != nil {
-			return nil, err
-		}
-		matches = append(matches, *sm)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	switch len(matches) {
-	case 0:
-		return nil, provider.ErrNotFound
-	case 1:
-		return &matches[0], nil
-	default:
-		return nil, fmt.Errorf("ambiguous session id %q (%d matches) for provider %s; use a longer id", id, len(matches), providerID)
-	}
+	return s.matchBySuffix(providerID, "%"+id, id, true)
 }
 
 func (s *Store) FindByID(id string) (*model.Summary, error) {
@@ -265,7 +240,7 @@ func (s *Store) FindByID(id string) (*model.Summary, error) {
 		return nil, provider.ErrNotFound
 	}
 	if sm, err := s.scanSummary(`SELECT id, provider, project_path, title, created_at, updated_at, message_count, storage_path, source_mtime
-FROM sessions WHERE id = ? LIMIT 1`, id); err == nil {
+FROM sessions WHERE id = ? ORDER BY updated_at DESC LIMIT 1`, id); err == nil {
 		return sm, nil
 	} else if err != provider.ErrNotFound {
 		return nil, err
@@ -276,9 +251,21 @@ FROM sessions WHERE id LIKE ? ORDER BY updated_at DESC LIMIT 1`, id+"%"); err ==
 	} else if err != provider.ErrNotFound {
 		return nil, err
 	}
-	rows, err := s.db.Query(`
+	return s.matchBySuffix("", "%"+id, id, false)
+}
+
+func (s *Store) matchBySuffix(providerID, likePattern, queryID string, withProvider bool) (*model.Summary, error) {
+	var rows *sql.Rows
+	var err error
+	if withProvider {
+		rows, err = s.db.Query(`
 SELECT id, provider, project_path, title, created_at, updated_at, message_count, storage_path, source_mtime
-FROM sessions WHERE id LIKE ? ORDER BY updated_at DESC`, "%"+id)
+FROM sessions WHERE provider = ? AND id LIKE ? ORDER BY updated_at DESC`, providerID, likePattern)
+	} else {
+		rows, err = s.db.Query(`
+SELECT id, provider, project_path, title, created_at, updated_at, message_count, storage_path, source_mtime
+FROM sessions WHERE id LIKE ? ORDER BY updated_at DESC`, likePattern)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +287,10 @@ FROM sessions WHERE id LIKE ? ORDER BY updated_at DESC`, "%"+id)
 	case 1:
 		return &matches[0], nil
 	default:
-		return nil, fmt.Errorf("ambiguous session id %q (%d matches); use a longer id", id, len(matches))
+		if withProvider {
+			return nil, fmt.Errorf("ambiguous session id %q (%d matches) for provider %s; use a longer id", queryID, len(matches), providerID)
+		}
+		return nil, fmt.Errorf("ambiguous session id %q (%d matches); use a longer id", queryID, len(matches))
 	}
 }
 

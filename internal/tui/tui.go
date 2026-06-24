@@ -92,8 +92,9 @@ func (i sessionItem) Description() string {
 		lbl = lipgloss.NewStyle().Foreground(color).Render(lbl)
 	}
 	proj := util.TildePath(i.summary.ProjectPath)
-	if len(proj) > 36 {
-		proj = "…" + proj[len(proj)-35:]
+	runes := []rune(proj)
+	if len(runes) > 36 {
+		proj = "…" + string(runes[len(runes)-35:])
 	}
 	return fmt.Sprintf("%s · %s · %s", lbl, i.summary.ShortID(), proj)
 }
@@ -267,7 +268,21 @@ func targetItems(reg *registry.Registry, exclude string) []list.Item {
 }
 
 func (m modelState) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, loadSessionsPageCmd(m, m.pageGen), backgroundIndexCmd(m.reg, m.idx))
+	cmds := []tea.Cmd{m.spinner.Tick, loadSessionsPageCmd(m, m.pageGen)}
+	total := 0
+	if counts, err := m.idx.CountByProvider(); err == nil {
+		for _, n := range counts {
+			total += n
+		}
+		if total > 0 {
+			cmds = append(cmds, func() tea.Msg {
+				return indexRefreshedMsg{counts: counts, reloadPage: false}
+			})
+			return tea.Batch(cmds...)
+		}
+	}
+	cmds = append(cmds, backgroundIndexCmd(m.reg, m.idx))
+	return tea.Batch(cmds...)
 }
 
 func dispatchPageLoad(m modelState) (modelState, tea.Cmd) {
@@ -413,6 +428,9 @@ func (m modelState) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sessions.SetItems(msg.items)
 		m.totalSessions = msg.total
 		m.pageOffset = msg.offset
+		if msg.total == 0 {
+			m.pageOffset = 0
+		}
 		m.cwdMode = msg.cwdMode
 		m.providerFilter = msg.provider
 		m.updateStatusLine()

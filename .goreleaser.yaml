@@ -15,6 +15,7 @@ builds:
       - arm64
     ldflags:
       - -s -w
+      - -X github.com/CyrusSE/agenthop/internal/cli.version={{.Version}}
 archives:
   - format: tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"

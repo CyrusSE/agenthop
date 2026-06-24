@@ -17,7 +17,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var version = "0.1.4"
+var version = "dev"
 
 type App struct {
 	Registry *registry.Registry
@@ -125,7 +125,7 @@ func (a *App) listCmd() *cobra.Command {
 			for _, s := range items {
 				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\n",
 					s.ShortID(), registry.DisplayName(a.Registry, s.Provider),
-					util.FormatRelative(s.UpdatedAt), s.MessageCount, truncate(s.Title, 50))
+					util.FormatRelative(s.UpdatedAt), s.MessageCount, util.TruncateRunes(s.Title, 50))
 			}
 			return w.Flush()
 		},
@@ -169,8 +169,8 @@ func (a *App) showCmd() *cobra.Command {
 			}
 			for _, m := range msgs {
 				text := m.PlainText()
-				if !raw && len(text) > 2000 {
-					text = text[:2000] + "…"
+				if !raw {
+					text = util.TruncateRunes(text, 2000)
 				}
 				fmt.Printf("[%s]\n%s\n\n", m.Role, text)
 			}
@@ -200,10 +200,7 @@ func (a *App) migrateCmd() *cobra.Command {
 				return err
 			}
 			if !yes && !dryRun {
-				fmt.Printf("Migrate %s → %s? [y/N] ", args[0], to)
-				var answer string
-				fmt.Scanln(&answer)
-				if strings.ToLower(strings.TrimSpace(answer)) != "y" {
+				if !confirmAction(fmt.Sprintf("Migrate %s → %s? [y/N] ", args[0], to)) {
 					fmt.Println("cancelled")
 					return nil
 				}
@@ -216,6 +213,10 @@ func (a *App) migrateCmd() *cobra.Command {
 				return err
 			}
 			if dryRun {
+				if res.AlreadyExists {
+					fmt.Printf("Dry run OK: already migrated to %s\n   Path: %s\n", res.TargetName, res.Write.StoragePath)
+					return nil
+				}
 				fmt.Printf("Dry run OK: would write to %s\n", res.Write.StoragePath)
 				return nil
 			}
@@ -333,12 +334,14 @@ func (a *App) exportCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			_ = a.ensureIndex(ctx, from, refresh)
+			if err := a.ensureIndex(ctx, from, refresh); err != nil {
+				return err
+			}
 			sm, p, err := migrate.ResolveSession(ctx, a.Registry, a.Index, args[0], from)
 			if err != nil {
 				return err
 			}
-			conv, err := p.Load(ctx, provider.SessionRef{ID: sm.ID, StoragePath: sm.StoragePath})
+			conv, err := p.Load(ctx, provider.SessionRef{ID: sm.ID, StoragePath: sm.StoragePath, ProjectPath: sm.ProjectPath})
 			if err != nil {
 				return err
 			}
@@ -371,10 +374,10 @@ func (a *App) tuiCmd() *cobra.Command {
 	}
 }
 
-func truncate(s string, n int) string {
-	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
+func confirmAction(prompt string) bool {
+	fmt.Print(prompt)
+	var answer string
+	fmt.Scanln(&answer)
+	return strings.ToLower(strings.TrimSpace(answer)) == "y"
 }
+

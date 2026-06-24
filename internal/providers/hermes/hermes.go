@@ -132,17 +132,23 @@ func (p *Provider) Write(ctx context.Context, conv *model.Conversation, opts pro
 		return nil, err
 	}
 	defer db.Close()
-	_, err = db.Exec(`INSERT INTO sessions (id, source, started_at, message_count, title) VALUES (?, 'cli', ?, ?, ?)`,
-		sessionID, now, len(conv.Messages), title)
+	tx, err := db.Begin()
 	if err != nil {
 		return nil, err
 	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`INSERT INTO sessions (id, source, started_at, message_count, title) VALUES (?, 'cli', ?, ?, ?)`,
+		sessionID, now, len(conv.Messages), title); err != nil {
+		return nil, err
+	}
 	for _, m := range conv.Messages {
-		_, err = db.Exec(`INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)`,
-			sessionID, string(m.Role), m.PlainText())
-		if err != nil {
+		if _, err = tx.Exec(`INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)`,
+			sessionID, string(m.Role), m.PlainText()); err != nil {
 			return nil, err
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
 	}
 	return &provider.WriteResult{SessionID: sessionID, StoragePath: p.dbPath + "#" + sessionID, ProjectPath: conv.ProjectPath}, nil
 }

@@ -14,7 +14,7 @@ import (
 
 // DedupIndex is satisfied by index.Store for migration deduplication.
 type DedupIndex interface {
-	FindMigration(providerID, originDigest string) (sessionID, storagePath string, ok bool)
+	FindMigration(providerID, originDigest string) (sessionID, storagePath string, ok bool, err error)
 }
 
 // FindExistingMigration scans JSONL storage for agenthop_migration metadata matching origin digest.
@@ -102,7 +102,11 @@ func FindDuplicate(idx DedupIndex, dst provider.Provider, conv *model.Conversati
 		return nil, false
 	}
 	if idx != nil {
-		if sid, path, ok := idx.FindMigration(dst.ID(), digest); ok {
+		sid, path, ok, err := idx.FindMigration(dst.ID(), digest)
+		if err != nil {
+			return nil, false
+		}
+		if ok {
 			return &provider.WriteResult{
 				SessionID:     sid,
 				StoragePath:   path,

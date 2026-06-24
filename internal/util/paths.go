@@ -176,12 +176,7 @@ func JSONMarshal(v any) ([]byte, error) {
 }
 
 func FirstUserSnippet(text string, max int) string {
-	text = strings.TrimSpace(text)
-	text = strings.ReplaceAll(text, "\n", " ")
-	if len(text) <= max {
-		return text
-	}
-	return text[:max] + "…"
+	return TruncateRunes(strings.TrimSpace(text), max)
 }
 
 func MatchID(id, query string) bool {

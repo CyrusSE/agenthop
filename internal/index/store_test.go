@@ -89,9 +89,9 @@ func TestMigrationDedup(t *testing.T) {
 	if err := store.RecordMigration("opencode", "digest-abc", "ses_123", "/db#ses_123"); err != nil {
 		t.Fatal(err)
 	}
-	sid, path, ok := store.FindMigration("opencode", "digest-abc")
-	if !ok || sid != "ses_123" || path != "/db#ses_123" {
-		t.Fatalf("FindMigration = %q %q ok=%v", sid, path, ok)
+	sid, path, ok, err := store.FindMigration("opencode", "digest-abc")
+	if err != nil || !ok || sid != "ses_123" || path != "/db#ses_123" {
+		t.Fatalf("FindMigration = %q %q ok=%v err=%v", sid, path, ok, err)
 	}
 }
 func TestGetAmbiguousSuffix(t *testing.T) {
