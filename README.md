@@ -1,75 +1,138 @@
-<div align="center">
+<p align="center">
+  <a href="https://github.com/CyrusSE/agenthop">
+    <img src="https://github.com/CyrusSE/agenthop/raw/main/docs/assets/banner.png" alt="agenthop — hop AI coding sessions between agents" width="100%" />
+  </a>
+</p>
 
-<img src="docs/assets/banner.svg" alt="agenthop" width="100%" />
+<p align="center">
+  <a href="https://github.com/CyrusSE/agenthop/actions/workflows/ci.yml"><img src="https://github.com/CyrusSE/agenthop/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/CyrusSE/agenthop/releases"><img src="https://img.shields.io/github/v/release/CyrusSE/agenthop?label=release" alt="Release" /></a>
+  <a href="https://goreportcard.com/report/github.com/CyrusSE/agenthop"><img src="https://goreportcard.com/badge/github.com/CyrusSE/agenthop" alt="Go Report Card" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License" /></a>
+</p>
 
-<br/><br/>
+<p align="center">
+  <strong>Hop AI coding sessions between agents</strong> — browse, preview, migrate, and resume across Claude Code, Codex, Cursor, OpenCode, and more.
+</p>
 
-[![CI](https://github.com/CyrusSE/agenthop/actions/workflows/ci.yml/badge.svg)](https://github.com/CyrusSE/agenthop/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/CyrusSE/agenthop?label=release)](https://github.com/CyrusSE/agenthop/releases)
-[![Go Report Card](https://goreportcard.com/badge/github.com/CyrusSE/agenthop)](https://goreportcard.com/report/github.com/CyrusSE/agenthop)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-
-**Hop AI coding sessions between agents** — fast indexed discovery, interactive TUI, and one-command migration.
-
-[Install](#install) · [Quick start](#quick-start) · [Providers](#providers) · [Docs](docs/architecture.md)
-
-</div>
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#tui">TUI</a> ·
+  <a href="#providers">Providers</a> ·
+  <a href="#cli">CLI</a> ·
+  <a href="docs/architecture.md">Architecture</a>
+</p>
 
 ---
 
 ## Why agenthop?
 
-When you hit rate limits or want a different model mid-task, you shouldn't lose context. **agenthop** reads sessions from Claude Code, Codex, Cursor, OpenCode, CommandCode, Hermes (and more), then writes them in the target agent's native format so you can resume immediately.
+You hit a rate limit mid-task, or you want a different model for the next step. **agenthop** keeps your context: it reads sessions from one coding agent and writes them in another agent's native format so you can resume where you left off.
 
-| | |
+| | What you get |
 |---|---|
-| **Fast** | SQLite index at `~/.cache/agenthop/index.db` — list & search without rescanning thousands of JSONL files |
-| **Safe** | Migration dedup via content digest — won't duplicate sessions on re-run |
-| **Portable** | Export/import JSON bundles for backup or handoff |
-| **Extensible** | Add a provider with one package + registry line |
+| **Browse** | Unified session list across agents, filtered by cwd or all projects |
+| **Preview** | Read conversation history before you migrate |
+| **Migrate** | One command (or TUI flow) to hop a session to another provider |
+| **Resume** | Copy or print the exact resume command for the target agent |
+| **Fast** | SQLite index at `~/.cache/agenthop/index.db` — no full JSONL rescan on every list |
+| **Safe** | Content-digest dedup — re-running migration won't duplicate sessions |
+
+---
 
 ## Install
 
 ```bash
-# Release binary (linux / macOS)
+# Recommended: install script (linux / macOS)
 curl -fsSL https://raw.githubusercontent.com/CyrusSE/agenthop/main/scripts/install.sh | bash
 
-# Go install
+# Go toolchain
 go install github.com/CyrusSE/agenthop/cmd/agenthop@latest
 
 # From source
-git clone https://github.com/CyrusSE/agenthop.git && cd agenthop && make install
+git clone https://github.com/CyrusSE/agenthop.git
+cd agenthop && make install
 ```
+
+Requires **Go 1.22+** for building from source. The install script places `agenthop` on your `PATH` (typically `~/.local/bin`).
+
+---
 
 ## Quick start
 
+**1. Open the TUI** (indexes in the background on first run):
+
 ```bash
-# Interactive TUI (default)
 agenthop
-
-# Index once (or per provider)
-agenthop index rebuild --provider claude-code
-agenthop index update --provider codex
-
-# List & preview
-agenthop list --provider claude-code --limit 20
-agenthop show <session-id> --provider claude-code --limit 10
-
-# Migrate & resume
-agenthop migrate <session-id> --from claude-code --to codex -y
-agenthop resume <session-id> --from claude-code --to codex
-
-# Portable bundle
-agenthop export <id> -o session.agenthop.json
-agenthop import session.agenthop.json --to opencode -y
 ```
 
-> **Tip:** `list` uses the cached index by default. Pass `--refresh` to rescan provider storage.
+**2. Or use the CLI:**
+
+```bash
+# Sessions in the current directory (and subfolders)
+agenthop list --cwd
+
+# All indexed sessions
+agenthop list --limit 20
+
+# Preview a session
+agenthop show <session-id> --limit 15
+
+# Migrate Claude → Codex and get resume command
+agenthop migrate <session-id> --from claude-code --to codex -y
+agenthop resume <session-id> --from claude-code --to codex
+```
+
+**3. Refresh the index** when you've created new sessions in your agents:
+
+```bash
+agenthop index update          # incremental
+agenthop index rebuild         # full rebuild
+agenthop list --refresh        # rescan then list
+```
+
+> `list` reads from the cached index by default. Use `--refresh` only when you need a live rescan.
+
+---
+
+## TUI
+
+The default interface is a Codex-style **session browser**: one list for all agents, scoped to your cwd by default.
+
+```
+   ╭──────◆──────╮
+   │  agenthop   │     cwd  all
+   ╰─────────────╯
+  session browser    ~/projects/my-app
+
+  3d ago  Fix auth bug          Claude Code · 67417609 · …/my-app
+  1h ago  Refactor API           Codex · 8a2f1c3e · …/my-app
+  …
+
+  ↑↓ navigate · enter actions · w cwd · a all · [/] page · p agent · r refresh
+```
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Open **actions** menu for the selected session |
+| `w` / `a` | Toggle **cwd** (this project tree) vs **all** sessions |
+| `[` / `]` | Previous / next page |
+| `p` | Filter by agent provider |
+| `m` | Migrate selected session |
+| `r` | Refresh index |
+| `c` | Copy resume command (after migrate) |
+| `Esc` | Back |
+| `q` | Quit |
+
+**Actions menu** (after `Enter` on a session): preview messages, migrate, copy session ID, copy resume command.
+
+---
 
 ## Providers
 
-| Agent | ID | Resume |
-|-------|-----|--------|
+| Agent | ID | Resume command |
+|-------|-----|----------------|
 | Claude Code | `claude-code` | `claude --resume <id>` |
 | Codex | `codex` | `codex resume <id>` |
 | Cursor CLI | `cursor` | `cursor-agent --resume <id>` |
@@ -77,60 +140,62 @@ agenthop import session.agenthop.json --to opencode -y
 | CommandCode | `commandcode` | `commandcode --resume <id>` |
 | Hermes | `hermes` | `hermes --session <id>` |
 
-Verify paths: `agenthop providers doctor`
-
-## TUI
-
-```
-◆ agenthop  session migrator
-
-┌ Agents ──────┐  ┌ Sessions ────────────┐
-│ Claude Code  │  │ 67417609  Fix auth bug │
-│ Codex        │  │ 8a2f1c3e  Refactor API │
-└──────────────┘  └────────────────────────┘
-```
-
-| Key | Action |
-|-----|--------|
-| `Enter` | Open provider / session / migrate target |
-| `m` | Migrate selected session |
-| `/` | Filter sessions |
-| `r` | Refresh index |
-| `c` | Copy resume command |
-| `Esc` | Back · `q` quit |
-
-## CLI reference
+Check that agent data paths are discoverable:
 
 ```bash
-agenthop list [--provider ID] [--limit N] [--refresh]
-agenthop show <id> [--provider ID]
+agenthop providers
+agenthop providers doctor
+```
+
+Add a new provider: [docs/adding-a-provider.md](docs/adding-a-provider.md)
+
+---
+
+## CLI
+
+```bash
+agenthop list [--cwd] [--provider ID] [--limit N] [--refresh]
+agenthop show <id> [--provider ID] [--limit N]
 agenthop migrate <id> --to <provider> [--from ID] [--dry-run] [-y]
 agenthop resume <id> --to <provider> [--from ID]
 agenthop index {status|rebuild|update} [--provider ID]
-agenthop export <id> -o file.json
-agenthop import file.json --to <provider>
+agenthop export <id> -o session.agenthop.json
+agenthop import session.agenthop.json --to <provider> [-y]
 agenthop providers [doctor]
+agenthop tui                    # explicit TUI (default when no subcommand)
 ```
+
+**Portable bundles** — export a session to JSON, import on another machine:
+
+```bash
+agenthop export abc123 -o backup.agenthop.json
+agenthop import backup.agenthop.json --to codex -y
+```
+
+---
 
 ## Development
 
 ```bash
-make build test
-./scripts/smoke.sh
+git clone https://github.com/CyrusSE/agenthop.git
+cd agenthop
+make build test      # compile + unit tests
+./scripts/smoke.sh   # integration smoke test
+make install         # install to ~/go/bin or GOBIN
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/adding-a-provider.md](docs/adding-a-provider.md).
-
-## Limitations
-
-- Cursor **GUI** chat storage differs from CLI `cursor-agent` paths
-- Tool/system messages may not round-trip on every target
-- Claude Code resume may require `cd` to the original project directory
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+Contributing: [CONTRIBUTING.md](CONTRIBUTING.md) · Provider guide: [docs/adding-a-provider.md](docs/adding-a-provider.md)
 
 ---
 
-<sub>Prior art: [ctxmv](https://github.com/Ryu0118/ctxmv)</sub>
+## Limitations
+
+- **Cursor GUI** chat history uses different storage than **Cursor CLI** (`cursor-agent`); agenthop indexes CLI sessions.
+- Tool and system messages may not round-trip perfectly on every target provider.
+- **Claude Code** resume may require `cd` to the original project directory.
+
+---
+
+## License
+
+[MIT](LICENSE)

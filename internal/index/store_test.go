@@ -116,6 +116,35 @@ func TestGetAmbiguousSuffix(t *testing.T) {
 	}
 }
 
+func TestListProjectCWD(t *testing.T) {
+	dir := t.TempDir()
+	store, err := index.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	now := time.Now()
+	for _, row := range []struct {
+		id, provider, path string
+	}{
+		{"a", "codex", "/home/proj"},
+		{"b", "claude-code", "/home/proj/sub"},
+		{"c", "cursor", "/other"},
+	} {
+		if err := store.Upsert(model.Summary{
+			ID: row.id, Provider: row.provider, ProjectPath: row.path,
+			UpdatedAt: now, StoragePath: "/tmp/" + row.id, SourceMtime: now.Unix(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := store.Count(index.ListOpts{ProjectCWD: "/home/proj"})
+	if err != nil || n != 2 {
+		t.Fatalf("cwd count: n=%d err=%v", n, err)
+	}
+}
+
 func TestListPaginationAndProjectExact(t *testing.T) {
 	dir := t.TempDir()
 	store, err := index.Open(filepath.Join(dir, "test.db"))
