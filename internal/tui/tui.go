@@ -441,6 +441,9 @@ func (m modelState) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.status = okStyle.Render("Migration complete — resume command ready (press c to copy)")
 		}
+		if m.backStage == stagePreview || m.backStage == stageMigrate {
+			m.backStage = stageSessions
+		}
 		m.stage = stagePreview
 		m.preview.SetContent(mutedStyle.Render("Migration complete.\n\nResume command:\n") + m.lastResume)
 		m.layout()
@@ -626,7 +629,11 @@ func (m modelState) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			} else if m.stage == stagePreview && m.selected != nil {
 				m.targets.SetItems(targetItems(m.reg, m.selected.summary.Provider))
-				m = m.gotoStage(stageMigrate)
+				m.stage = stageMigrate
+				m.layout()
+				debuglog.Log("H6", "tui.migrate", "from preview", "run1", map[string]any{
+					"backStage": m.backStage,
+				})
 			} else if m.stage == stageActions && m.selected != nil {
 				m.targets.SetItems(targetItems(m.reg, m.selected.summary.Provider))
 				m = m.gotoStage(stageMigrate)

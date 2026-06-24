@@ -271,7 +271,7 @@ FROM sessions WHERE id = ? LIMIT 1`, id); err == nil {
 		return nil, err
 	}
 	if sm, err := s.scanSummary(`SELECT id, provider, project_path, title, created_at, updated_at, message_count, storage_path, source_mtime
-FROM sessions WHERE id LIKE ? LIMIT 1`, id+"%"); err == nil {
+FROM sessions WHERE id LIKE ? ORDER BY updated_at DESC LIMIT 1`, id+"%"); err == nil {
 		return sm, nil
 	} else if err != provider.ErrNotFound {
 		return nil, err
