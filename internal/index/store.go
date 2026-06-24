@@ -178,23 +178,48 @@ func (s *Store) List(opts ListOpts) ([]model.Summary, error) {
 }
 
 func (s *Store) Get(providerID, id string) (*model.Summary, error) {
-	row := s.db.QueryRow(`
-SELECT id, provider, project_path, title, created_at, updated_at, message_count, storage_path, source_mtime
-FROM sessions WHERE provider = ? AND (id = ? OR id LIKE ? OR id LIKE ?)
-ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END LIMIT 1
-`, providerID, id, id+"%", "%"+id, id)
-	var sm model.Summary
-	var created, updated, mtime int64
-	if err := row.Scan(&sm.ID, &sm.Provider, &sm.ProjectPath, &sm.Title, &created, &updated, &sm.MessageCount, &sm.StoragePath, &mtime); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, provider.ErrNotFound
-		}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, provider.ErrNotFound
+	}
+	if sm, err := s.scanSummary(`SELECT id, provider, project_path, title, created_at, updated_at, message_count, storage_path, source_mtime
+FROM sessions WHERE provider = ? AND id = ? LIMIT 1`, providerID, id); err == nil {
+		return sm, nil
+	} else if err != provider.ErrNotFound {
 		return nil, err
 	}
-	sm.CreatedAt = time.Unix(created, 0)
-	sm.UpdatedAt = time.Unix(updated, 0)
-	sm.SourceMtime = mtime
-	return &sm, nil
+	if sm, err := s.scanSummary(`SELECT id, provider, project_path, title, created_at, updated_at, message_count, storage_path, source_mtime
+FROM sessions WHERE provider = ? AND id LIKE ? ORDER BY updated_at DESC LIMIT 1`, providerID, id+"%"); err == nil {
+		return sm, nil
+	} else if err != provider.ErrNotFound {
+		return nil, err
+	}
+	rows, err := s.db.Query(`
+SELECT id, provider, project_path, title, created_at, updated_at, message_count, storage_path, source_mtime
+FROM sessions WHERE provider = ? AND id LIKE ? ORDER BY updated_at DESC`, providerID, "%"+id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var matches []model.Summary
+	for rows.Next() {
+		sm, err := s.scanSummaryRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		matches = append(matches, *sm)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	switch len(matches) {
+	case 0:
+		return nil, provider.ErrNotFound
+	case 1:
+		return &matches[0], nil
+	default:
+		return nil, fmt.Errorf("ambiguous session id %q (%d matches) for provider %s; use a longer id", id, len(matches), providerID)
+	}
 }
 
 func (s *Store) FindByID(id string) (*model.Summary, error) {

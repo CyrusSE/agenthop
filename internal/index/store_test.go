@@ -93,6 +93,28 @@ func TestMigrationDedup(t *testing.T) {
 		t.Fatalf("FindMigration = %q %q ok=%v", sid, path, ok)
 	}
 }
+func TestGetAmbiguousSuffix(t *testing.T) {
+	dir := t.TempDir()
+	store, err := index.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now()
+	for _, id := range []string{"aaa-deadbeef", "bbb-deadbeef"} {
+		if err := store.Upsert(model.Summary{
+			ID: id, Provider: "codex", Title: id,
+			UpdatedAt: now, StoragePath: "/tmp/" + id, SourceMtime: now.Unix(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err = store.Get("codex", "deadbeef")
+	if err == nil {
+		t.Fatal("expected ambiguous error")
+	}
+}
+
 func TestOpenCreatesDir(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", "cache")
 	dbPath := filepath.Join(dir, "index.db")
