@@ -38,6 +38,7 @@ const pageSize = 50
 
 const (
 	stageSessions = iota
+	stageActions
 	stageProviders
 	stagePreview
 	stageMigrate
@@ -100,6 +101,27 @@ func (i targetItem) Title() string       { return i.name }
 func (i targetItem) Description() string { return mutedStyle.Render(i.id) }
 func (i targetItem) FilterValue() string { return i.id + " " + i.name }
 
+type actionItem struct{ id, title, desc string }
+
+func (i actionItem) Title() string       { return i.title }
+func (i actionItem) Description() string { return mutedStyle.Render(i.desc) }
+func (i actionItem) FilterValue() string { return i.id + " " + i.title }
+
+func actionItems(reg *registry.Registry, sm model.Summary) []list.Item {
+	items := []list.Item{
+		actionItem{id: "preview", title: "Preview messages", desc: "Read conversation in the right pane"},
+		actionItem{id: "migrate", title: "Migrate to another agent", desc: "Hop this session to Codex, Cursor, etc."},
+		actionItem{id: "copy-id", title: "Copy session ID", desc: sm.ShortID() + " (full id to clipboard)"},
+	}
+	if p, err := reg.Get(sm.Provider); err == nil && p.SupportsResume() {
+		cmd := p.ResumeCommand(provider.WriteResult{SessionID: sm.ID, ProjectPath: sm.ProjectPath})
+		if cmd != "" {
+			items = append(items, actionItem{id: "resume", title: "Copy resume command", desc: truncate(cmd, 48)})
+		}
+	}
+	return items
+}
+
 type sessionsPageMsg struct {
 	items      []list.Item
 	total      int
@@ -130,10 +152,12 @@ type modelState struct {
 	engine         *migrate.Engine
 	providers      list.Model
 	sessions       list.Model
+	actions        list.Model
 	targets        list.Model
 	preview        viewport.Model
 	spinner        spinner.Model
 	stage          int
+	backStage      int
 	selected       *sessionItem
 	loading        bool
 	indexing       bool
@@ -178,6 +202,11 @@ func Run(reg *registry.Registry, idx *index.Store, engine *migrate.Engine) error
 	targetList.Title = "Migrate to"
 	targetList.DisableQuitKeybindings()
 
+	actionList := list.New([]list.Item{}, delegate, 44, 12)
+	actionList.Title = "Actions"
+	actionList.SetShowStatusBar(false)
+	actionList.DisableQuitKeybindings()
+
 	vp := viewport.New(64, 20)
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
@@ -185,10 +214,13 @@ func Run(reg *registry.Registry, idx *index.Store, engine *migrate.Engine) error
 
 	m := modelState{
 		reg: reg, idx: idx, engine: engine,
-		providers: provList, sessions: sessList, targets: targetList,
+		providers: provList, sessions: sessList, actions: actionList, targets: targetList,
 		preview: vp, spinner: sp,
 		stage: stageSessions, cwdMode: cwdMode, cwd: cwd, indexing: true, pageGen: 1,
 	}
+	debuglog.Log("H5", "tui.startup", "banner embedded", "run1", map[string]any{
+		"bannerLen": len(bannerASCII), "cwd": cwd,
+	})
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, runErr := p.Run()
 	return runErr
@@ -237,9 +269,19 @@ func listOptsFor(m modelState) index.ListOpts {
 		Offset:   m.pageOffset,
 	}
 	if m.cwdMode && m.cwd != "" {
-		opts.ProjectExact = m.cwd
+		opts.ProjectCWD = m.cwd
 	}
 	return opts
+}
+
+func providerCounts(items []list.Item) map[string]int {
+	out := make(map[string]int)
+	for _, it := range items {
+		if si, ok := it.(sessionItem); ok {
+			out[si.summary.Provider]++
+		}
+	}
+	return out
 }
 
 func loadSessionsPageCmd(m modelState, gen uint64) tea.Cmd {
@@ -273,6 +315,13 @@ func loadSessionsPageCmd(m modelState, gen uint64) tea.Cmd {
 			cwdMode: cwdMode, provider: providerFilter, gen: gen, err: err,
 		}
 	}
+}
+
+func (m modelState) gotoStage(stage int) modelState {
+	m.backStage = m.stage
+	m.stage = stage
+	m.layout()
+	return m
 }
 
 func backgroundIndexCmd(reg *registry.Registry, idx *index.Store) tea.Cmd {
@@ -361,6 +410,10 @@ func (m modelState) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cwdMode = msg.cwdMode
 		m.providerFilter = msg.provider
 		m.updateStatusLine()
+		debuglog.Log("H1", "tui.sessionsPage", "page loaded", "run1", map[string]any{
+			"total": msg.total, "page": len(msg.items), "cwdMode": msg.cwdMode,
+			"providers": providerCounts(msg.items),
+		})
 		m.layout()
 		return m, nil
 	case previewLoadedMsg:
@@ -371,6 +424,10 @@ func (m modelState) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.preview.SetContent(msg.content)
 		m.stage = stagePreview
+		m.layout()
+		debuglog.Log("H4", "tui.previewLoaded", "preview ready", "run1", map[string]any{
+			"backStage": m.backStage, "contentLen": len(msg.content),
+		})
 		return m, nil
 	case migrateDoneMsg:
 		m.loading = false
@@ -385,6 +442,8 @@ func (m modelState) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = okStyle.Render("Migration complete — resume command ready (press c to copy)")
 		}
 		m.stage = stagePreview
+		m.preview.SetContent(mutedStyle.Render("Migration complete.\n\nResume command:\n") + m.lastResume)
+		m.layout()
 		return m, nil
 	case indexRefreshedMsg:
 		m.indexing = false
@@ -417,15 +476,28 @@ func (m modelState) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "esc":
 			m.err = ""
+			prev := m.stage
 			switch m.stage {
 			case stageMigrate:
-				m.stage = stagePreview
+				m.stage = m.backStage
 			case stagePreview:
+				m.stage = m.backStage
+				if m.backStage == stageSessions {
+					m.preview.SetContent("")
+				}
+			case stageActions:
 				m.stage = stageSessions
+				m.selected = nil
 			case stageProviders:
 				m.stage = stageSessions
 			default:
 				m.status = ""
+			}
+			if m.stage != prev {
+				m.layout()
+				debuglog.Log("H2", "tui.esc", "stage back", "run1", map[string]any{
+					"from": prev, "to": m.stage, "backStage": m.backStage,
+				})
 			}
 			return m, nil
 		case "c":
@@ -494,8 +566,44 @@ func (m modelState) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if it, ok := m.sessions.SelectedItem().(sessionItem); ok {
 					sel := it
 					m.selected = &sel
-					m.loading = true
-					return m, tea.Batch(m.spinner.Tick, loadPreviewCmd(m.reg, it.summary))
+					m.actions.SetItems(actionItems(m.reg, it.summary))
+					m = m.gotoStage(stageActions)
+					debuglog.Log("H3", "tui.enter", "open actions", "run1", map[string]any{
+						"provider": it.summary.Provider, "id": it.summary.ShortID(),
+					})
+					return m, nil
+				}
+			case stageActions:
+				if m.selected == nil {
+					return m, nil
+				}
+				if act, ok := m.actions.SelectedItem().(actionItem); ok {
+					switch act.id {
+					case "preview":
+						m.backStage = stageActions
+						m.loading = true
+						return m, tea.Batch(m.spinner.Tick, loadPreviewCmd(m.reg, m.selected.summary))
+					case "migrate":
+						m.targets.SetItems(targetItems(m.reg, m.selected.summary.Provider))
+						m = m.gotoStage(stageMigrate)
+						return m, nil
+					case "copy-id":
+						_ = clipboard.WriteAll(m.selected.summary.ID)
+						m.status = okStyle.Render("Copied session ID to clipboard")
+						return m, nil
+					case "resume":
+						if p, err := m.reg.Get(m.selected.summary.Provider); err == nil {
+							cmd := p.ResumeCommand(provider.WriteResult{
+								SessionID: m.selected.summary.ID, ProjectPath: m.selected.summary.ProjectPath,
+							})
+							if cmd != "" {
+								_ = clipboard.WriteAll(cmd)
+								m.lastResume = cmd
+								m.status = okStyle.Render("Copied resume command to clipboard")
+							}
+						}
+						return m, nil
+					}
 				}
 			case stageMigrate:
 				if m.selected == nil {
@@ -514,13 +622,14 @@ func (m modelState) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					sel := it
 					m.selected = &sel
 					m.targets.SetItems(targetItems(m.reg, it.summary.Provider))
-					m.stage = stageMigrate
-					m.layout()
+					m = m.gotoStage(stageMigrate)
 				}
 			} else if m.stage == stagePreview && m.selected != nil {
 				m.targets.SetItems(targetItems(m.reg, m.selected.summary.Provider))
-				m.stage = stageMigrate
-				m.layout()
+				m = m.gotoStage(stageMigrate)
+			} else if m.stage == stageActions && m.selected != nil {
+				m.targets.SetItems(targetItems(m.reg, m.selected.summary.Provider))
+				m = m.gotoStage(stageMigrate)
 			}
 			return m, nil
 		}
@@ -536,6 +645,8 @@ func (m modelState) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.providers, cmd = m.providers.Update(msg)
 	case stageSessions:
 		m.sessions, cmd = m.sessions.Update(msg)
+	case stageActions:
+		m.actions, cmd = m.actions.Update(msg)
 	case stageMigrate:
 		m.targets, cmd = m.targets.Update(msg)
 	default:
@@ -585,14 +696,18 @@ func (m *modelState) layout() {
 		m.providers.SetSize(min(m.width-4, 48), h)
 	case stageSessions:
 		m.sessions.SetSize(m.width-4, h)
-	case stageMigrate:
+	case stageActions, stageMigrate:
 		w := m.width / 2
 		if w < 28 {
 			w = 28
 		}
 		m.sessions.SetSize(w-2, h)
-		m.targets.SetSize(w-2, min(16, h))
-	default:
+		if m.stage == stageActions {
+			m.actions.SetSize(w-2, min(14, h))
+		} else {
+			m.targets.SetSize(w-2, min(16, h))
+		}
+	case stagePreview:
 		w := m.width / 3
 		if w < 28 {
 			w = 28
@@ -620,8 +735,8 @@ func (m modelState) filterChips() string {
 
 func (m modelState) View() string {
 	var b strings.Builder
-	logo := accentStyle.Render("◆ agenthop") + mutedStyle.Render("  session browser")
-	b.WriteString(logo + "  " + m.filterChips() + "\n")
+	b.WriteString(renderBanner())
+	b.WriteString(mutedStyle.Render("  session browser") + "  " + m.filterChips() + "\n")
 	if m.cwdMode && m.cwd != "" {
 		b.WriteString(mutedStyle.Render("  "+util.TildePath(m.cwd)) + "\n")
 	}
@@ -640,20 +755,40 @@ func (m modelState) View() string {
 		b.WriteString(paneStyle.Width(m.width - 4).Render(m.providers.View()))
 	case stageSessions:
 		b.WriteString(paneStyle.Width(m.width - 4).Render(m.sessions.View()))
+	case stageActions:
+		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top,
+			paneStyle.Width(m.width/2-2).Render(m.sessions.View()),
+			paneStyle.Width(m.width/2-2).Render(m.actions.View()),
+		))
 	case stageMigrate:
 		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top,
 			paneStyle.Width(m.width/2-2).Render(m.sessions.View()),
 			paneStyle.Width(m.width/2-2).Render(m.targets.View()),
 		))
-	default:
+	case stagePreview:
 		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top,
 			paneStyle.Width(m.width/3-2).Render(m.sessions.View()),
 			paneStyle.Width(m.width*2/3-4).Render(m.preview.View()),
 		))
 	}
-	help := "↑↓ navigate · enter open · w cwd · a all · [/] page · p agent · m migrate · r refresh · c copy · esc back · q quit"
+	help := m.footerHelp()
 	b.WriteString("\n" + footerStyle.Width(m.width).Render(help))
 	return b.String()
+}
+
+func (m modelState) footerHelp() string {
+	switch m.stage {
+	case stageActions:
+		return "↑↓ navigate · enter run action · m migrate · esc back · q quit"
+	case stagePreview:
+		return "↑↓ scroll preview · m migrate · c copy resume · esc back · q quit"
+	case stageMigrate:
+		return "↑↓ pick target · enter migrate · esc back · q quit"
+	case stageProviders:
+		return "↑↓ pick agent · enter filter · esc back · q quit"
+	default:
+		return "↑↓ navigate · enter actions · w cwd · a all · [/] page · p agent · m migrate · r refresh · esc · q quit"
+	}
 }
 
 func truncate(s string, n int) string {

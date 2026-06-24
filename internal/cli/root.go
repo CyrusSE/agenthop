@@ -113,7 +113,7 @@ func (a *App) listCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				opts.ProjectExact = util.NormalizeProjectPath(wd)
+				opts.ProjectCWD = util.NormalizeProjectPath(wd)
 			} else if project != "" {
 				opts.ProjectFilter = project
 			}

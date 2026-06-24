@@ -138,6 +138,7 @@ type ListOpts struct {
 	Provider      string
 	ProjectFilter string
 	ProjectExact  string
+	ProjectCWD    string // exact path or any session under this directory
 	Limit         int
 	Offset        int
 	Query         string
@@ -150,7 +151,12 @@ func (s *Store) listWhere(opts ListOpts) (string, []any) {
 		q += ` AND provider = ?`
 		args = append(args, opts.Provider)
 	}
-	if opts.ProjectExact != "" {
+	if opts.ProjectCWD != "" {
+		norm := util.NormalizeProjectPath(opts.ProjectCWD)
+		prefix := norm + string(filepath.Separator) + "%"
+		q += ` AND (project_path = ? OR project_path LIKE ?)`
+		args = append(args, norm, prefix)
+	} else if opts.ProjectExact != "" {
 		norm := util.NormalizeProjectPath(opts.ProjectExact)
 		if norm == opts.ProjectExact {
 			q += ` AND project_path = ?`
