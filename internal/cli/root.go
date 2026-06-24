@@ -7,9 +7,7 @@ import (
 	"os"
 	"strings"
 	"text/tabwriter"
-	"time"
 
-	"github.com/CyrusSE/agenthop/internal/debuglog"
 	"github.com/CyrusSE/agenthop/internal/index"
 	"github.com/CyrusSE/agenthop/internal/migrate"
 	"github.com/CyrusSE/agenthop/internal/provider"
@@ -84,11 +82,7 @@ func (a *App) ensureIndex(ctx context.Context, providerFilter string, refresh bo
 			}
 		}
 	}
-	start := time.Now()
-	n, err := index.UpdateIncremental(ctx, a.Registry, a.Index, registry.NormalizeID(providerFilter))
-	debuglog.Log("H1", "cli.ensureIndex", "index update", "run1", map[string]any{
-		"provider": providerFilter, "updated": n, "ms": time.Since(start).Milliseconds(), "refresh": refresh,
-	})
+	_, err := index.UpdateIncremental(ctx, a.Registry, a.Index, registry.NormalizeID(providerFilter))
 	return err
 }
 

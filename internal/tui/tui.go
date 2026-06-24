@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/list"
@@ -13,7 +12,6 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/CyrusSE/agenthop/internal/debuglog"
 	"github.com/CyrusSE/agenthop/internal/index"
 	"github.com/CyrusSE/agenthop/internal/migrate"
 	"github.com/CyrusSE/agenthop/internal/model"
@@ -218,9 +216,6 @@ func Run(reg *registry.Registry, idx *index.Store, engine *migrate.Engine) error
 		preview: vp, spinner: sp,
 		stage: stageSessions, cwdMode: cwdMode, cwd: cwd, indexing: true, pageGen: 1,
 	}
-	debuglog.Log("H5", "tui.startup", "banner embedded", "run1", map[string]any{
-		"bannerLen": len(bannerASCII), "cwd": cwd,
-	})
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, runErr := p.Run()
 	return runErr
@@ -274,16 +269,6 @@ func listOptsFor(m modelState) index.ListOpts {
 	return opts
 }
 
-func providerCounts(items []list.Item) map[string]int {
-	out := make(map[string]int)
-	for _, it := range items {
-		if si, ok := it.(sessionItem); ok {
-			out[si.summary.Provider]++
-		}
-	}
-	return out
-}
-
 func loadSessionsPageCmd(m modelState, gen uint64) tea.Cmd {
 	reg, idx := m.reg, m.idx
 	opts := listOptsFor(m)
@@ -326,11 +311,7 @@ func (m modelState) gotoStage(stage int) modelState {
 
 func backgroundIndexCmd(reg *registry.Registry, idx *index.Store) tea.Cmd {
 	return func() tea.Msg {
-		start := time.Now()
 		n, err := index.UpdateIncremental(context.Background(), reg, idx, "")
-		debuglog.Log("H1", "tui.backgroundIndex", "index update", "run1", map[string]any{
-			"updated": n, "ms": time.Since(start).Milliseconds(),
-		})
 		counts, _ := idx.CountByProvider()
 		return indexRefreshedMsg{counts: counts, err: err, updated: n, reloadPage: true}
 	}
@@ -338,11 +319,7 @@ func backgroundIndexCmd(reg *registry.Registry, idx *index.Store) tea.Cmd {
 
 func refreshIndexCmd(reg *registry.Registry, idx *index.Store, providerFilter string, reloadPage bool) tea.Cmd {
 	return func() tea.Msg {
-		start := time.Now()
 		n, err := index.UpdateIncremental(context.Background(), reg, idx, providerFilter)
-		debuglog.Log("H1", "tui.refreshIndex", "index update", "run1", map[string]any{
-			"provider": providerFilter, "updated": n, "ms": time.Since(start).Milliseconds(),
-		})
 		counts, _ := idx.CountByProvider()
 		return indexRefreshedMsg{counts: counts, err: err, updated: n, reloadPage: reloadPage}
 	}
@@ -382,9 +359,6 @@ func migrateCmd(engine *migrate.Engine, sm model.Summary, to string) tea.Cmd {
 		res, err := engine.Run(context.Background(), migrate.Options{
 			SessionID: sm.ID, FromProvider: sm.Provider, ToProvider: to,
 		})
-		debuglog.Log("H3", "tui.migrate", "migrate finished", "run1", map[string]any{
-			"to": to, "ok": err == nil, "already": res != nil && res.AlreadyExists,
-		})
 		return migrateDoneMsg{res: res, err: err}
 	}
 }
@@ -410,10 +384,6 @@ func (m modelState) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cwdMode = msg.cwdMode
 		m.providerFilter = msg.provider
 		m.updateStatusLine()
-		debuglog.Log("H1", "tui.sessionsPage", "page loaded", "run1", map[string]any{
-			"total": msg.total, "page": len(msg.items), "cwdMode": msg.cwdMode,
-			"providers": providerCounts(msg.items),
-		})
 		m.layout()
 		return m, nil
 	case previewLoadedMsg:
@@ -425,9 +395,6 @@ func (m modelState) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.preview.SetContent(msg.content)
 		m.stage = stagePreview
 		m.layout()
-		debuglog.Log("H4", "tui.previewLoaded", "preview ready", "run1", map[string]any{
-			"backStage": m.backStage, "contentLen": len(msg.content),
-		})
 		return m, nil
 	case migrateDoneMsg:
 		m.loading = false
@@ -498,9 +465,6 @@ func (m modelState) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.stage != prev {
 				m.layout()
-				debuglog.Log("H2", "tui.esc", "stage back", "run1", map[string]any{
-					"from": prev, "to": m.stage, "backStage": m.backStage,
-				})
 			}
 			return m, nil
 		case "c":
@@ -571,9 +535,6 @@ func (m modelState) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.selected = &sel
 					m.actions.SetItems(actionItems(m.reg, it.summary))
 					m = m.gotoStage(stageActions)
-					debuglog.Log("H3", "tui.enter", "open actions", "run1", map[string]any{
-						"provider": it.summary.Provider, "id": it.summary.ShortID(),
-					})
 					return m, nil
 				}
 			case stageActions:
@@ -631,9 +592,6 @@ func (m modelState) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.targets.SetItems(targetItems(m.reg, m.selected.summary.Provider))
 				m.stage = stageMigrate
 				m.layout()
-				debuglog.Log("H6", "tui.migrate", "from preview", "run1", map[string]any{
-					"backStage": m.backStage,
-				})
 			} else if m.stage == stageActions && m.selected != nil {
 				m.targets.SetItems(targetItems(m.reg, m.selected.summary.Provider))
 				m = m.gotoStage(stageMigrate)
