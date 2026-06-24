@@ -145,6 +145,36 @@ func TestListProjectCWD(t *testing.T) {
 	}
 }
 
+func TestFindByIDPrefixPrefersNewest(t *testing.T) {
+	dir := t.TempDir()
+	store, err := index.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	now := time.Now()
+	if err := store.Upsert(model.Summary{
+		ID: "prefix-old", Provider: "codex", Title: "old",
+		UpdatedAt: now.Add(-48 * time.Hour), StoragePath: "/tmp/old", SourceMtime: now.Unix(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Upsert(model.Summary{
+		ID: "prefix-new", Provider: "codex", Title: "new",
+		UpdatedAt: now, StoragePath: "/tmp/new", SourceMtime: now.Unix(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sm, err := store.FindByID("prefix")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sm.ID != "prefix-new" {
+		t.Fatalf("expected newest prefix match, got %q", sm.ID)
+	}
+}
+
 func TestListPaginationAndProjectExact(t *testing.T) {
 	dir := t.TempDir()
 	store, err := index.Open(filepath.Join(dir, "test.db"))
