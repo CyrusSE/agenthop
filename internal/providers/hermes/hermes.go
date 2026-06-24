@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/CyrusSE/agenthop/internal/config"
@@ -126,7 +125,7 @@ func (p *Provider) Write(ctx context.Context, conv *model.Conversation, opts pro
 		title = util.FirstUserSnippet(conv.Messages[0].PlainText(), 60)
 	}
 	if opts.DryRun {
-		return &provider.WriteResult{SessionID: sessionID, StoragePath: p.dbPath, ProjectPath: conv.ProjectPath}, nil
+		return &provider.WriteResult{SessionID: sessionID, StoragePath: p.dbPath + "#" + sessionID, ProjectPath: conv.ProjectPath}, nil
 	}
 	db, err := sql.Open("sqlite", p.dbPath)
 	if err != nil {
@@ -145,11 +144,9 @@ func (p *Provider) Write(ctx context.Context, conv *model.Conversation, opts pro
 			return nil, err
 		}
 	}
-	return &provider.WriteResult{SessionID: sessionID, StoragePath: p.dbPath, ProjectPath: conv.ProjectPath}, nil
+	return &provider.WriteResult{SessionID: sessionID, StoragePath: p.dbPath + "#" + sessionID, ProjectPath: conv.ProjectPath}, nil
 }
 
 func (p *Provider) ResumeCommand(r provider.WriteResult) string {
 	return "hermes --session " + r.SessionID
 }
-
-var _ = strings.TrimSpace

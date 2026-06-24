@@ -38,7 +38,7 @@ func (a *App) resumeCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			dup, ok := migrate.FindDuplicate(dst, conv)
+			dup, ok := migrate.FindDuplicate(a.Index, dst, conv)
 			if !ok {
 				return fmt.Errorf("not migrated to %s yet — run: agenthop migrate %s --to %s -y", to, args[0], to)
 			}

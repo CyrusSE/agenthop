@@ -75,8 +75,9 @@ type migrateDoneMsg struct {
 	err error
 }
 type indexRefreshedMsg struct {
-	counts map[string]int
-	err    error
+	counts   map[string]int
+	err      error
+	provider string
 }
 
 type modelState struct {
@@ -219,11 +220,11 @@ func migrateCmd(engine *migrate.Engine, sm model.Summary, to string) tea.Cmd {
 	}
 }
 
-func refreshIndexCmd(reg *registry.Registry, idx *index.Store) tea.Cmd {
+func refreshIndexCmd(reg *registry.Registry, idx *index.Store, providerFilter string) tea.Cmd {
 	return func() tea.Msg {
-		_, err := index.UpdateIncremental(context.Background(), reg, idx, "")
+		_, err := index.UpdateIncremental(context.Background(), reg, idx, providerFilter)
 		counts, _ := idx.CountByProvider()
-		return indexRefreshedMsg{counts: counts, err: err}
+		return indexRefreshedMsg{counts: counts, err: err, provider: providerFilter}
 	}
 }
 
@@ -275,7 +276,11 @@ func (m modelState) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.providers.SetItems(providerItems(m.reg, msg.counts))
-		m.status = "Index refreshed"
+		if msg.provider != "" {
+			m.status = fmt.Sprintf("Refreshed %s index", msg.provider)
+		} else {
+			m.status = "Index refreshed"
+		}
 		return m, nil
 	case tea.KeyMsg:
 		if m.loading {
@@ -349,7 +354,11 @@ func (m modelState) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "r":
 			m.loading = true
-			return m, tea.Batch(m.spinner.Tick, refreshIndexCmd(m.reg, m.idx))
+			filter := ""
+			if m.selectedP != "" {
+				filter = m.selectedP
+			}
+			return m, tea.Batch(m.spinner.Tick, refreshIndexCmd(m.reg, m.idx, filter))
 		}
 	}
 	var cmd tea.Cmd
@@ -433,10 +442,11 @@ func (m modelState) View() string {
 
 func truncate(s string, n int) string {
 	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) <= n {
+	runes := []rune(s)
+	if len(runes) <= n {
 		return s
 	}
-	return s[:n] + "…"
+	return string(runes[:n]) + "…"
 }
 
 func min(a, b int) int {

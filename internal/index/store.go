@@ -66,8 +66,50 @@ CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT
 );
+CREATE TABLE IF NOT EXISTS migration_dedup (
+  provider TEXT NOT NULL,
+  origin_digest TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  storage_path TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (provider, origin_digest)
+);
+CREATE INDEX IF NOT EXISTS idx_migration_dedup_provider ON migration_dedup(provider);
 `)
 	return err
+}
+
+// RecordMigration stores a successful migration for deduplication (SQLite and JSONL targets).
+func (s *Store) RecordMigration(providerID, originDigest, sessionID, storagePath string) error {
+	if originDigest == "" || sessionID == "" {
+		return nil
+	}
+	_, err := s.db.Exec(`
+INSERT INTO migration_dedup (provider, origin_digest, session_id, storage_path, created_at)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(provider, origin_digest) DO UPDATE SET
+  session_id=excluded.session_id,
+  storage_path=excluded.storage_path,
+  created_at=excluded.created_at
+`, providerID, originDigest, sessionID, storagePath, time.Now().Unix())
+	return err
+}
+
+// FindMigration returns a prior migration target for the same origin digest.
+func (s *Store) FindMigration(providerID, originDigest string) (sessionID, storagePath string, ok bool) {
+	if originDigest == "" {
+		return "", "", false
+	}
+	err := s.db.QueryRow(`
+SELECT session_id, storage_path FROM migration_dedup
+WHERE provider = ? AND origin_digest = ? LIMIT 1`, providerID, originDigest).Scan(&sessionID, &storagePath)
+	if err == sql.ErrNoRows {
+		return "", "", false
+	}
+	if err != nil {
+		return "", "", false
+	}
+	return sessionID, storagePath, true
 }
 
 func (s *Store) Upsert(summary model.Summary) error {
@@ -157,33 +199,74 @@ ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END LIMIT 1
 
 func (s *Store) FindByID(id string) (*model.Summary, error) {
 	id = strings.TrimSpace(id)
-	if len(id) >= 36 {
-		row := s.db.QueryRow(`
-SELECT id, provider, project_path, title, created_at, updated_at, message_count, storage_path, source_mtime
-FROM sessions WHERE id = ? LIMIT 1`, id)
-		var sm model.Summary
-		var created, updated, mtime int64
-		if err := row.Scan(&sm.ID, &sm.Provider, &sm.ProjectPath, &sm.Title, &created, &updated, &sm.MessageCount, &sm.StoragePath, &mtime); err == nil {
-			sm.CreatedAt = time.Unix(created, 0)
-			sm.UpdatedAt = time.Unix(updated, 0)
-			sm.SourceMtime = mtime
-			return &sm, nil
-		}
+	if id == "" {
+		return nil, provider.ErrNotFound
+	}
+	if sm, err := s.scanSummary(`SELECT id, provider, project_path, title, created_at, updated_at, message_count, storage_path, source_mtime
+FROM sessions WHERE id = ? LIMIT 1`, id); err == nil {
+		return sm, nil
+	} else if err != provider.ErrNotFound {
+		return nil, err
+	}
+	if sm, err := s.scanSummary(`SELECT id, provider, project_path, title, created_at, updated_at, message_count, storage_path, source_mtime
+FROM sessions WHERE id LIKE ? LIMIT 1`, id+"%"); err == nil {
+		return sm, nil
+	} else if err != provider.ErrNotFound {
+		return nil, err
 	}
 	rows, err := s.db.Query(`
 SELECT id, provider, project_path, title, created_at, updated_at, message_count, storage_path, source_mtime
-FROM sessions WHERE id = ? OR id LIKE ? OR id LIKE ?
-ORDER BY updated_at DESC LIMIT 1`, id, id+"%", "%"+id)
+FROM sessions WHERE id LIKE ? ORDER BY updated_at DESC`, "%"+id)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	if !rows.Next() {
+	var matches []model.Summary
+	for rows.Next() {
+		sm, err := s.scanSummaryRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		matches = append(matches, *sm)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	switch len(matches) {
+	case 0:
+		return nil, provider.ErrNotFound
+	case 1:
+		return &matches[0], nil
+	default:
+		return nil, fmt.Errorf("ambiguous session id %q (%d matches); use a longer id", id, len(matches))
+	}
+}
+
+func (s *Store) scanSummary(query string, args ...any) (*model.Summary, error) {
+	row := s.db.QueryRow(query, args...)
+	sm, err := s.scanSummaryFromRow(row)
+	if err == sql.ErrNoRows {
 		return nil, provider.ErrNotFound
 	}
+	return sm, err
+}
+
+func (s *Store) scanSummaryRow(rows *sql.Rows) (*model.Summary, error) {
 	var sm model.Summary
 	var created, updated, mtime int64
 	if err := rows.Scan(&sm.ID, &sm.Provider, &sm.ProjectPath, &sm.Title, &created, &updated, &sm.MessageCount, &sm.StoragePath, &mtime); err != nil {
+		return nil, err
+	}
+	sm.CreatedAt = time.Unix(created, 0)
+	sm.UpdatedAt = time.Unix(updated, 0)
+	sm.SourceMtime = mtime
+	return &sm, nil
+}
+
+func (s *Store) scanSummaryFromRow(row *sql.Row) (*model.Summary, error) {
+	var sm model.Summary
+	var created, updated, mtime int64
+	if err := row.Scan(&sm.ID, &sm.Provider, &sm.ProjectPath, &sm.Title, &created, &updated, &sm.MessageCount, &sm.StoragePath, &mtime); err != nil {
 		return nil, err
 	}
 	sm.CreatedAt = time.Unix(created, 0)

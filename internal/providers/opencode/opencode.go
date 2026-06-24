@@ -3,6 +3,8 @@ package opencode
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,6 +85,18 @@ func (p *Provider) Discover(ctx context.Context, opts provider.DiscoverOpts) ([]
 	return out, nil
 }
 
+type ocMessageData struct {
+	Role string `json:"role"`
+	Time struct {
+		Created int64 `json:"created"`
+	} `json:"time"`
+}
+
+type ocPartData struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
 func (p *Provider) Load(ctx context.Context, ref provider.SessionRef) (*model.Conversation, error) {
 	db, err := p.openRO()
 	if err != nil {
@@ -102,23 +116,35 @@ func (p *Provider) Load(ctx context.Context, ref provider.SessionRef) (*model.Co
 		CreatedAt: time.UnixMilli(created), UpdatedAt: time.UnixMilli(updated),
 		StoragePath: p.dbPath + "#" + id,
 	}
-	rows, err := db.Query(`SELECT role, content, time_created FROM message WHERE session_id = ? ORDER BY time_created`, id)
+	rows, err := db.Query(`SELECT id, data, time_created FROM message WHERE session_id = ? ORDER BY time_created`, id)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var role, content string
+		var msgID, data string
 		var ts int64
-		if rows.Scan(&role, &content, &ts) != nil {
+		if rows.Scan(&msgID, &data, &ts) != nil {
+			continue
+		}
+		var md ocMessageData
+		if json.Unmarshal([]byte(data), &md) != nil || md.Role == "" {
+			continue
+		}
+		content := p.messageText(db, msgID)
+		if content == "" {
 			continue
 		}
 		mrole := model.RoleUser
-		if role == "assistant" {
+		if md.Role == "assistant" {
 			mrole = model.RoleAssistant
 		}
+		msgTS := ts
+		if md.Time.Created > 0 {
+			msgTS = md.Time.Created
+		}
 		conv.Messages = append(conv.Messages, model.Message{
-			Role: mrole, Content: content, Timestamp: time.UnixMilli(ts),
+			Role: mrole, Content: content, Timestamp: time.UnixMilli(msgTS),
 		})
 	}
 	if len(conv.Messages) == 0 {
@@ -128,11 +154,32 @@ func (p *Provider) Load(ctx context.Context, ref provider.SessionRef) (*model.Co
 	return conv, nil
 }
 
+func (p *Provider) messageText(db *sql.DB, messageID string) string {
+	rows, err := db.Query(`SELECT data FROM part WHERE message_id = ? ORDER BY time_created`, messageID)
+	if err != nil {
+		return ""
+	}
+	defer rows.Close()
+	var parts []string
+	for rows.Next() {
+		var data string
+		if rows.Scan(&data) != nil {
+			continue
+		}
+		var pd ocPartData
+		if json.Unmarshal([]byte(data), &pd) != nil || pd.Type != "text" || pd.Text == "" {
+			continue
+		}
+		parts = append(parts, pd.Text)
+	}
+	return strings.Join(parts, "\n")
+}
+
 func (p *Provider) Write(ctx context.Context, conv *model.Conversation, opts provider.WriteOpts) (*provider.WriteResult, error) {
 	if len(conv.Messages) == 0 {
 		return nil, provider.ErrEmptySession
 	}
-	sessionID := "ses_" + strings.ReplaceAll(uuid.New().String(), "-", "")[:20]
+	sessionID := ocID("ses_")
 	project := opts.ProjectPath
 	if project == "" {
 		project = conv.ProjectPath
@@ -145,33 +192,75 @@ func (p *Provider) Write(ctx context.Context, conv *model.Conversation, opts pro
 	if title == "" {
 		title = "Migrated session"
 	}
+	storagePath := p.dbPath + "#" + sessionID
 	if opts.DryRun {
-		return &provider.WriteResult{SessionID: sessionID, StoragePath: p.dbPath, ProjectPath: project}, nil
+		return &provider.WriteResult{SessionID: sessionID, StoragePath: storagePath, ProjectPath: project}, nil
 	}
 	db, err := sql.Open("sqlite", p.dbPath)
 	if err != nil {
 		return nil, err
 	}
 	defer db.Close()
-	_, err = db.Exec(`INSERT INTO session (id, project_id, directory, title, version, time_created, time_updated, slug)
-VALUES (?, 'global', ?, ?, '1.0.0', ?, ?, ?)`,
-		sessionID, project, title, now, now, util.FirstUserSnippet(title, 20))
-	if err != nil {
+	if err := p.ensureGlobalProject(db, now); err != nil {
 		return nil, err
 	}
+	meta := model.NewMigrationMeta(conv)
+	metaJSON, _ := json.Marshal(map[string]any{"agenthop_migration": meta})
+	slug := util.FirstUserSnippet(title, 20)
+	if slug == "" {
+		slug = "migrated"
+	}
+	_, err = db.Exec(`INSERT INTO session (
+  id, project_id, directory, title, version, slug, time_created, time_updated, metadata, agent, model, cost,
+  tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write
+) VALUES (?, 'global', ?, ?, '1.15.13', ?, ?, ?, ?, 'build', '{"id":"claude-sonnet-4.6","providerID":"github-copilot"}', 0, 0, 0, 0, 0, 0)`,
+		sessionID, project, title, slug, now, now, string(metaJSON))
+	if err != nil {
+		return nil, fmt.Errorf("insert session: %w", err)
+	}
 	for _, m := range conv.Messages {
-		msgID := uuid.New().String()
+		msgID := ocID("msg_")
 		ts := m.Timestamp.UnixMilli()
 		if ts == 0 {
 			ts = now
 		}
-		_, err = db.Exec(`INSERT INTO message (id, session_id, role, content, time_created, time_updated) VALUES (?, ?, ?, ?, ?, ?)`,
-			msgID, sessionID, string(m.Role), m.PlainText(), ts, ts)
+		msgData, _ := json.Marshal(map[string]any{
+			"role": string(m.Role),
+			"time": map[string]any{"created": ts},
+			"summary": map[string]any{"diffs": []any{}},
+		})
+		_, err = db.Exec(`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`,
+			msgID, sessionID, ts, ts, string(msgData))
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("insert message: %w", err)
+		}
+		partID := ocID("prt_")
+		partData, _ := json.Marshal(ocPartData{Type: "text", Text: m.PlainText()})
+		_, err = db.Exec(`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`,
+			partID, msgID, sessionID, ts, ts, string(partData))
+		if err != nil {
+			return nil, fmt.Errorf("insert part: %w", err)
 		}
 	}
-	return &provider.WriteResult{SessionID: sessionID, StoragePath: p.dbPath, ProjectPath: project}, nil
+	return &provider.WriteResult{SessionID: sessionID, StoragePath: storagePath, ProjectPath: project}, nil
+}
+
+func (p *Provider) ensureGlobalProject(db *sql.DB, now int64) error {
+	var n int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM project WHERE id = 'global'`).Scan(&n)
+	if n > 0 {
+		return nil
+	}
+	_, err := db.Exec(`INSERT INTO project (id, worktree, time_created, time_updated, sandboxes) VALUES ('global', '/', ?, ?, '[]')`, now, now)
+	return err
+}
+
+func ocID(prefix string) string {
+	raw := strings.ReplaceAll(uuid.New().String(), "-", "")
+	if len(raw) > 20 {
+		raw = raw[:20]
+	}
+	return prefix + raw
 }
 
 func (p *Provider) ResumeCommand(r provider.WriteResult) string {

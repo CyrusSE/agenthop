@@ -11,6 +11,11 @@ import (
 	"github.com/CyrusSE/agenthop/internal/util"
 )
 
+// DedupIndex is satisfied by index.Store for migration deduplication.
+type DedupIndex interface {
+	FindMigration(providerID, originDigest string) (sessionID, storagePath string, ok bool)
+}
+
 // FindExistingMigration scans JSONL storage for agenthop_migration metadata matching origin digest.
 func FindExistingMigration(storagePath, originDigest string) (string, bool) {
 	if storagePath == "" || originDigest == "" {
@@ -77,11 +82,20 @@ func migrationDigest(line []byte) string {
 	return ""
 }
 
-// FindDuplicate searches target provider storage for an existing migration of conv.
-func FindDuplicate(dst provider.Provider, conv *model.Conversation) (*provider.WriteResult, bool) {
+// FindDuplicate searches the index and target provider storage for an existing migration of conv.
+func FindDuplicate(idx DedupIndex, dst provider.Provider, conv *model.Conversation) (*provider.WriteResult, bool) {
 	digest := model.OriginDigest(conv)
 	if digest == "" {
 		return nil, false
+	}
+	if idx != nil {
+		if sid, path, ok := idx.FindMigration(dst.ID(), digest); ok {
+			return &provider.WriteResult{
+				SessionID:     sid,
+				StoragePath:   path,
+				AlreadyExists: true,
+			}, true
+		}
 	}
 	for _, ps := range dst.DefaultPaths() {
 		root := ps.Path
