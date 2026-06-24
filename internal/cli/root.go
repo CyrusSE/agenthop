@@ -19,7 +19,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var version = "0.1.3"
+var version = "0.1.4"
 
 type App struct {
 	Registry *registry.Registry
@@ -95,7 +95,7 @@ func (a *App) ensureIndex(ctx context.Context, providerFilter string, refresh bo
 func (a *App) listCmd() *cobra.Command {
 	var providerID, project string
 	var limit int
-	var asJSON, refresh bool
+	var asJSON, refresh, cwdOnly bool
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List indexed sessions",
@@ -104,9 +104,20 @@ func (a *App) listCmd() *cobra.Command {
 			if err := a.ensureIndex(ctx, providerID, refresh); err != nil {
 				return err
 			}
-			items, err := a.Index.List(index.ListOpts{
-				Provider: registry.NormalizeID(providerID), ProjectFilter: project, Limit: limit,
-			})
+			opts := index.ListOpts{
+				Provider: registry.NormalizeID(providerID),
+				Limit:    limit,
+			}
+			if cwdOnly {
+				wd, err := os.Getwd()
+				if err != nil {
+					return err
+				}
+				opts.ProjectExact = util.NormalizeProjectPath(wd)
+			} else if project != "" {
+				opts.ProjectFilter = project
+			}
+			items, err := a.Index.List(opts)
 			if err != nil {
 				return err
 			}
@@ -119,13 +130,15 @@ func (a *App) listCmd() *cobra.Command {
 			fmt.Fprintln(w, "ID\tPROVIDER\tUPDATED\tMSGS\tTITLE")
 			for _, s := range items {
 				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\n",
-					s.ShortID(), s.Provider, s.UpdatedAt.Format(time.RFC3339), s.MessageCount, truncate(s.Title, 50))
+					s.ShortID(), registry.DisplayName(a.Registry, s.Provider),
+					util.FormatRelative(s.UpdatedAt), s.MessageCount, truncate(s.Title, 50))
 			}
 			return w.Flush()
 		},
 	}
 	cmd.Flags().StringVar(&providerID, "provider", "", "filter by provider")
 	cmd.Flags().StringVar(&project, "project", "", "filter by project path substring")
+	cmd.Flags().BoolVar(&cwdOnly, "cwd", false, "only sessions for the current working directory")
 	cmd.Flags().IntVar(&limit, "limit", 50, "max results")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "JSON output")
 	cmd.Flags().BoolVar(&refresh, "refresh", false, "refresh index before listing")
