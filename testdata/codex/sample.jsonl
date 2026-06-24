@@ -1,0 +1,3 @@
+{"type":"session_meta","session_id":"test-session-001","cwd":"/tmp/demo","timestamp":"2026-06-01T10:00:00Z"}
+{"type":"event_msg","timestamp":"2026-06-01T10:00:01Z","event_msg":{"role":"user","message":"Hello from codex fixture"}}
+{"type":"event_msg","timestamp":"2026-06-01T10:00:02Z","event_msg":{"role":"assistant","message":"Hello back from assistant"}}

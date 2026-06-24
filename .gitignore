@@ -1,0 +1,6 @@
+/bin/
+/dist/
+*.agenthop.json
+.DS_Store
+.idea/
+.vscode/

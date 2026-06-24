@@ -1,0 +1,94 @@
+package registry
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/CyrusSE/agenthop/internal/provider"
+	"github.com/CyrusSE/agenthop/internal/providers/claude"
+	"github.com/CyrusSE/agenthop/internal/providers/codex"
+	"github.com/CyrusSE/agenthop/internal/providers/commandcode"
+	"github.com/CyrusSE/agenthop/internal/providers/cursor"
+	"github.com/CyrusSE/agenthop/internal/providers/hermes"
+	"github.com/CyrusSE/agenthop/internal/providers/opencode"
+)
+
+type Registry struct {
+	byID map[string]provider.Provider
+	all  []provider.Provider
+}
+
+func New() *Registry {
+	providers := []provider.Provider{
+		claude.New(),
+		codex.New(),
+		cursor.New(),
+		opencode.New(),
+		commandcode.New(),
+		hermes.New(),
+		provider.NewStub("devin", "Devin", "docs/providers/stub.md",
+			provider.PathSpec{Label: "config", Path: "~/.config/devin", Env: "DEVIN_HOME"}),
+		provider.NewStub("windsurf", "Windsurf", "docs/providers/stub.md",
+			provider.PathSpec{Label: "data", Path: "~/.codeium/windsurf", Env: "WINDSURF_HOME"}),
+		provider.NewStub("gemini-cli", "Gemini CLI", "docs/providers/stub.md",
+			provider.PathSpec{Label: "config", Path: "~/.config/gemini", Env: "GEMINI_CLI_HOME"}),
+		provider.NewStub("aider", "Aider", "docs/providers/stub.md",
+			provider.PathSpec{Label: "history", Path: "~/.aider", Env: "AIDER_HOME"}),
+	}
+	byID := make(map[string]provider.Provider, len(providers))
+	for _, p := range providers {
+		byID[p.ID()] = p
+	}
+	return &Registry{byID: byID, all: providers}
+}
+
+func (r *Registry) All() []provider.Provider {
+	out := make([]provider.Provider, len(r.all))
+	copy(out, r.all)
+	return out
+}
+
+func (r *Registry) Get(id string) (provider.Provider, error) {
+	id = NormalizeID(id)
+	p, ok := r.byID[id]
+	if !ok {
+		return nil, fmt.Errorf("unknown provider %q", id)
+	}
+	return p, nil
+}
+
+func (r *Registry) Installed() []provider.Provider {
+	var out []provider.Provider
+	for _, p := range r.all {
+		if p.Installed() {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func (r *Registry) IDs() []string {
+	ids := make([]string, 0, len(r.all))
+	for _, p := range r.all {
+		ids = append(ids, p.ID())
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func NormalizeID(id string) string {
+	id = strings.ToLower(strings.TrimSpace(id))
+	replacements := map[string]string{
+		"claude": "claude-code", "claude_code": "claude-code", "claude-code": "claude-code",
+		"codex": "codex",
+		"cursor": "cursor", "cursor-agent": "cursor",
+		"opencode": "opencode", "open-code": "opencode",
+		"commandcode": "commandcode", "command-code": "commandcode",
+		"hermes": "hermes", "hermes-agent": "hermes",
+	}
+	if v, ok := replacements[id]; ok {
+		return v
+	}
+	return id
+}

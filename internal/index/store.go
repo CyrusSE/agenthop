@@ -1,0 +1,297 @@
+package index
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/CyrusSE/agenthop/internal/config"
+	"github.com/CyrusSE/agenthop/internal/model"
+	"github.com/CyrusSE/agenthop/internal/provider"
+	"github.com/CyrusSE/agenthop/internal/registry"
+	_ "modernc.org/sqlite"
+)
+
+type Store struct {
+	db *sql.DB
+}
+
+func Open(path string) (*Store, error) {
+	if path == "" {
+		path = config.IndexPath()
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	if err != nil {
+		return nil, err
+	}
+	s := &Store{db: db}
+	if err := s.migrate(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *Store) Close() error {
+	if s.db != nil {
+		return s.db.Close()
+	}
+	return nil
+}
+
+func (s *Store) migrate() error {
+	_, err := s.db.Exec(`
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  project_path TEXT,
+  title TEXT,
+  created_at INTEGER,
+  updated_at INTEGER,
+  message_count INTEGER,
+  storage_path TEXT NOT NULL,
+  source_mtime INTEGER NOT NULL,
+  PRIMARY KEY (provider, id)
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sessions_provider ON sessions(provider);
+CREATE TABLE IF NOT EXISTS meta (
+  key TEXT PRIMARY KEY,
+  value TEXT
+);
+`)
+	return err
+}
+
+func (s *Store) Upsert(summary model.Summary) error {
+	_, err := s.db.Exec(`
+INSERT INTO sessions (id, provider, project_path, title, created_at, updated_at, message_count, storage_path, source_mtime)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(provider, id) DO UPDATE SET
+  project_path=excluded.project_path,
+  title=excluded.title,
+  created_at=excluded.created_at,
+  updated_at=excluded.updated_at,
+  message_count=excluded.message_count,
+  storage_path=excluded.storage_path,
+  source_mtime=excluded.source_mtime
+`, summary.ID, summary.Provider, summary.ProjectPath, summary.Title,
+		summary.CreatedAt.Unix(), summary.UpdatedAt.Unix(), summary.MessageCount,
+		summary.StoragePath, summary.SourceMtime)
+	return err
+}
+
+type ListOpts struct {
+	Provider      string
+	ProjectFilter string
+	Limit         int
+	Query         string
+}
+
+func (s *Store) List(opts ListOpts) ([]model.Summary, error) {
+	q := `SELECT id, provider, project_path, title, created_at, updated_at, message_count, storage_path, source_mtime FROM sessions WHERE 1=1`
+	var args []any
+	if opts.Provider != "" {
+		q += ` AND provider = ?`
+		args = append(args, opts.Provider)
+	}
+	if opts.ProjectFilter != "" {
+		q += ` AND project_path LIKE ?`
+		args = append(args, "%"+opts.ProjectFilter+"%")
+	}
+	if opts.Query != "" {
+		q += ` AND (id LIKE ? OR title LIKE ? OR project_path LIKE ?)`
+		like := "%" + opts.Query + "%"
+		args = append(args, like, like, like)
+	}
+	q += ` ORDER BY updated_at DESC`
+	if opts.Limit > 0 {
+		q += fmt.Sprintf(` LIMIT %d`, opts.Limit)
+	}
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.Summary
+	for rows.Next() {
+		var sm model.Summary
+		var created, updated, mtime int64
+		if err := rows.Scan(&sm.ID, &sm.Provider, &sm.ProjectPath, &sm.Title, &created, &updated, &sm.MessageCount, &sm.StoragePath, &mtime); err != nil {
+			return nil, err
+		}
+		sm.CreatedAt = time.Unix(created, 0)
+		sm.UpdatedAt = time.Unix(updated, 0)
+		sm.SourceMtime = mtime
+		out = append(out, sm)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) Get(providerID, id string) (*model.Summary, error) {
+	row := s.db.QueryRow(`
+SELECT id, provider, project_path, title, created_at, updated_at, message_count, storage_path, source_mtime
+FROM sessions WHERE provider = ? AND (id = ? OR id LIKE ? OR id LIKE ?)
+ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END LIMIT 1
+`, providerID, id, id+"%", "%"+id, id)
+	var sm model.Summary
+	var created, updated, mtime int64
+	if err := row.Scan(&sm.ID, &sm.Provider, &sm.ProjectPath, &sm.Title, &created, &updated, &sm.MessageCount, &sm.StoragePath, &mtime); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, provider.ErrNotFound
+		}
+		return nil, err
+	}
+	sm.CreatedAt = time.Unix(created, 0)
+	sm.UpdatedAt = time.Unix(updated, 0)
+	sm.SourceMtime = mtime
+	return &sm, nil
+}
+
+func (s *Store) FindByID(id string) (*model.Summary, error) {
+	id = strings.TrimSpace(id)
+	if len(id) >= 36 {
+		row := s.db.QueryRow(`
+SELECT id, provider, project_path, title, created_at, updated_at, message_count, storage_path, source_mtime
+FROM sessions WHERE id = ? LIMIT 1`, id)
+		var sm model.Summary
+		var created, updated, mtime int64
+		if err := row.Scan(&sm.ID, &sm.Provider, &sm.ProjectPath, &sm.Title, &created, &updated, &sm.MessageCount, &sm.StoragePath, &mtime); err == nil {
+			sm.CreatedAt = time.Unix(created, 0)
+			sm.UpdatedAt = time.Unix(updated, 0)
+			sm.SourceMtime = mtime
+			return &sm, nil
+		}
+	}
+	rows, err := s.db.Query(`
+SELECT id, provider, project_path, title, created_at, updated_at, message_count, storage_path, source_mtime
+FROM sessions WHERE id = ? OR id LIKE ? OR id LIKE ?
+ORDER BY updated_at DESC LIMIT 1`, id, id+"%", "%"+id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, provider.ErrNotFound
+	}
+	var sm model.Summary
+	var created, updated, mtime int64
+	if err := rows.Scan(&sm.ID, &sm.Provider, &sm.ProjectPath, &sm.Title, &created, &updated, &sm.MessageCount, &sm.StoragePath, &mtime); err != nil {
+		return nil, err
+	}
+	sm.CreatedAt = time.Unix(created, 0)
+	sm.UpdatedAt = time.Unix(updated, 0)
+	sm.SourceMtime = mtime
+	return &sm, nil
+}
+
+func (s *Store) CountByProvider() (map[string]int, error) {
+	rows, err := s.db.Query(`SELECT provider, COUNT(*) FROM sessions GROUP BY provider`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]int)
+	for rows.Next() {
+		var p string
+		var n int
+		if err := rows.Scan(&p, &n); err != nil {
+			return nil, err
+		}
+		out[p] = n
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) SetMeta(key, value string) error {
+	_, err := s.db.Exec(`INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
+	return err
+}
+
+func (s *Store) GetMeta(key string) (string, error) {
+	var v string
+	err := s.db.QueryRow(`SELECT value FROM meta WHERE key = ?`, key).Scan(&v)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return v, err
+}
+
+func (s *Store) NeedsRefresh(providerID string, storagePath string, mtime int64) (bool, error) {
+	var existing int64
+	err := s.db.QueryRow(`SELECT source_mtime FROM sessions WHERE provider = ? AND storage_path = ? LIMIT 1`, providerID, storagePath).Scan(&existing)
+	if err == sql.ErrNoRows {
+		return true, nil
+	}
+	if err != nil {
+		return true, err
+	}
+	return existing != mtime, nil
+}
+
+func Rebuild(ctx context.Context, reg *registry.Registry, store *Store, providerFilter string) (int, error) {
+	if providerFilter != "" {
+		if _, err := store.db.Exec(`DELETE FROM sessions WHERE provider = ?`, providerFilter); err != nil {
+			return 0, err
+		}
+	} else {
+		if _, err := store.db.Exec(`DELETE FROM sessions`); err != nil {
+			return 0, err
+		}
+	}
+	total := 0
+	for _, p := range reg.All() {
+		if providerFilter != "" && p.ID() != providerFilter {
+			continue
+		}
+		if !p.Installed() {
+			continue
+		}
+		summaries, err := p.Discover(ctx, provider.DiscoverOpts{})
+		if err != nil {
+			return total, fmt.Errorf("%s: %w", p.ID(), err)
+		}
+		for _, sm := range summaries {
+			if err := store.Upsert(sm); err != nil {
+				return total, err
+			}
+			total++
+		}
+	}
+	_ = store.SetMeta("last_rebuild", time.Now().UTC().Format(time.RFC3339))
+	return total, nil
+}
+
+func UpdateIncremental(ctx context.Context, reg *registry.Registry, store *Store, providerFilter string) (int, error) {
+	total := 0
+	for _, p := range reg.All() {
+		if providerFilter != "" && p.ID() != providerFilter {
+			continue
+		}
+		if !p.Installed() {
+			continue
+		}
+		summaries, err := p.Discover(ctx, provider.DiscoverOpts{})
+		if err != nil {
+			return total, fmt.Errorf("%s: %w", p.ID(), err)
+		}
+		for _, sm := range summaries {
+			need, err := store.NeedsRefresh(sm.Provider, sm.StoragePath, sm.SourceMtime)
+			if err != nil || need {
+				if err := store.Upsert(sm); err != nil {
+					return total, err
+				}
+				total++
+			}
+		}
+	}
+	_ = store.SetMeta("last_update", time.Now().UTC().Format(time.RFC3339))
+	return total, nil
+}
