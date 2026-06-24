@@ -153,17 +153,8 @@ func (s *Store) listWhere(opts ListOpts) (string, []any) {
 	}
 	if opts.ProjectCWD != "" {
 		norm := util.NormalizeProjectPath(opts.ProjectCWD)
-		home := util.NormalizeProjectPath(config.HomeDir())
-		exactHome := home != "" && norm == home
-		if exactHome {
-			// At ~, subtree match would include every session under home.
-			q += ` AND project_path = ?`
-			args = append(args, norm)
-		} else {
-			prefix := norm + string(filepath.Separator) + "%"
-			q += ` AND (project_path = ? OR project_path LIKE ?)`
-			args = append(args, norm, prefix)
-		}
+		q += ` AND project_path = ?`
+		args = append(args, norm)
 	} else if opts.ProjectExact != "" {
 		norm := util.NormalizeProjectPath(opts.ProjectExact)
 		if norm == opts.ProjectExact {

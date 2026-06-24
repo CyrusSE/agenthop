@@ -11,6 +11,7 @@ test:
 
 install:
 	go install -buildvcs=false -ldflags "-X github.com/CyrusSE/agenthop/internal/cli.version=$(VERSION)" ./cmd/agenthop
+	@rm -f $(HOME)/.local/bin/agenthop
 
 clean:
 	rm -rf bin/ dist/
