@@ -46,23 +46,21 @@ func TestProjectPathMatchesCWD(t *testing.T) {
 	if !util.ProjectPathMatchesCWD(proj, home) {
 		t.Fatal("project under home should match home filter")
 	}
-	if !util.ProjectPathMatchesCWD(sub, proj) {
-		t.Fatal("subdir should match project filter")
+	if util.ProjectPathMatchesCWD(sub, proj) {
+		t.Fatal("subdir should not match exact project filter")
 	}
 	if util.ProjectPathMatchesCWD("/other", proj) {
 		t.Fatal("unrelated path should not match")
 	}
 }
 
-func TestProjectCWDUseDescendants(t *testing.T) {
+func TestProjectPathMatchesCWDExact(t *testing.T) {
 	home := util.HomeDir()
 	if home == "" {
 		t.Skip("no home dir")
 	}
-	if util.ProjectCWDUseDescendants(home) {
-		t.Fatal("home should not use descendant matching")
-	}
-	if !util.ProjectCWDUseDescendants(filepath.Join(home, "proj")) {
-		t.Fatal("project dir should include descendant sessions")
+	proj := filepath.Join(home, "proj")
+	if !util.ProjectPathMatchesCWD(proj, proj) {
+		t.Fatal("exact path should match")
 	}
 }

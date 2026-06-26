@@ -154,14 +154,9 @@ func (s *Store) listWhere(opts ListOpts) (string, []any) {
 	if opts.ProjectCWD != "" {
 		norm := util.NormalizeProjectPath(opts.ProjectCWD)
 		home := util.HomeDir()
-		useDesc := util.ProjectCWDUseDescendants(norm)
-		homeOnly := home != "" && norm == home
-		if homeOnly {
+		if home != "" && norm == home {
 			q += ` AND project_path LIKE ? ESCAPE '\'`
 			args = append(args, util.EscapeLike(norm)+`/%`)
-		} else if useDesc {
-			q += ` AND (project_path = ? OR project_path LIKE ? ESCAPE '\')`
-			args = append(args, norm, util.EscapeLike(norm)+`/%`)
 		} else {
 			q += ` AND project_path = ?`
 			args = append(args, norm)

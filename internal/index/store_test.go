@@ -141,8 +141,8 @@ func TestListProjectCWD(t *testing.T) {
 		}
 	}
 	n, err := store.Count(index.ListOpts{ProjectCWD: "/home/proj"})
-	if err != nil || n != 2 {
-		t.Fatalf("project cwd should include subdirs: n=%d err=%v", n, err)
+	if err != nil || n != 1 {
+		t.Fatalf("project cwd should be exact match only: n=%d err=%v", n, err)
 	}
 }
 

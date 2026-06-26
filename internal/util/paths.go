@@ -45,16 +45,6 @@ func HomeDir() string {
 	return NormalizeProjectPath(home)
 }
 
-// ProjectCWDUseDescendants reports whether a "here" filter should include sessions
-// in subdirectories of cwd. Home is excluded because it uses a dedicated rule.
-func ProjectCWDUseDescendants(cwd string) bool {
-	home := HomeDir()
-	if home == "" {
-		return false
-	}
-	return NormalizeProjectPath(cwd) != home
-}
-
 // ProjectPathMatchesCWD reports whether a stored project path belongs to the cwd filter.
 func ProjectPathMatchesCWD(projectPath, cwd string) bool {
 	projectPath = NormalizeProjectPath(projectPath)
@@ -66,10 +56,7 @@ func ProjectPathMatchesCWD(projectPath, cwd string) bool {
 	if home != "" && cwd == home {
 		return strings.HasPrefix(projectPath, home+string(filepath.Separator))
 	}
-	if projectPath == cwd {
-		return true
-	}
-	return strings.HasPrefix(projectPath, cwd+string(filepath.Separator))
+	return projectPath == cwd
 }
 
 func EncodeClaudeProjectPath(absPath string) string {
