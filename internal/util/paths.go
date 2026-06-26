@@ -45,14 +45,14 @@ func HomeDir() string {
 	return NormalizeProjectPath(home)
 }
 
-// ProjectCWDIncludesSubtree reports whether sessions under subdirectories of cwd
-// should match a "here" filter. Only the home directory uses subtree matching.
-func ProjectCWDIncludesSubtree(cwd string) bool {
+// ProjectCWDUseDescendants reports whether a "here" filter should include sessions
+// in subdirectories of cwd. Home is excluded because it would match nearly everything.
+func ProjectCWDUseDescendants(cwd string) bool {
 	home := HomeDir()
 	if home == "" {
 		return false
 	}
-	return NormalizeProjectPath(cwd) == home
+	return NormalizeProjectPath(cwd) != home
 }
 
 func EncodeClaudeProjectPath(absPath string) string {

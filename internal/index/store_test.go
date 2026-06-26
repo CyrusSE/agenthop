@@ -141,8 +141,8 @@ func TestListProjectCWD(t *testing.T) {
 		}
 	}
 	n, err := store.Count(index.ListOpts{ProjectCWD: "/home/proj"})
-	if err != nil || n != 1 {
-		t.Fatalf("cwd count exact only: n=%d err=%v", n, err)
+	if err != nil || n != 2 {
+		t.Fatalf("project cwd should include subdirs: n=%d err=%v", n, err)
 	}
 }
 
@@ -239,13 +239,13 @@ func TestListProjectCWDAtHome(t *testing.T) {
 		}
 	}
 	n, err := store.Count(index.ListOpts{ProjectCWD: home})
-	if err != nil || n != 2 {
-		t.Fatalf("home cwd should include home and subdirs: n=%d err=%v", n, err)
+	if err != nil || n != 1 {
+		t.Fatalf("home cwd should match exact path only: n=%d err=%v", n, err)
 	}
 	sub := filepath.Join(home, "proj")
 	n, err = store.Count(index.ListOpts{ProjectCWD: sub})
 	if err != nil || n != 1 {
-		t.Fatalf("subdir cwd should match exact subdir: n=%d err=%v", n, err)
+		t.Fatalf("subdir cwd exact only at one level: n=%d err=%v", n, err)
 	}
 }
 

@@ -153,7 +153,7 @@ func (s *Store) listWhere(opts ListOpts) (string, []any) {
 	}
 	if opts.ProjectCWD != "" {
 		norm := util.NormalizeProjectPath(opts.ProjectCWD)
-		if util.ProjectCWDIncludesSubtree(norm) {
+		if util.ProjectCWDUseDescendants(norm) {
 			q += ` AND (project_path = ? OR project_path LIKE ? ESCAPE '\')`
 			args = append(args, norm, util.EscapeLike(norm)+`/%`)
 		} else {

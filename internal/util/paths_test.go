@@ -33,15 +33,15 @@ func TestMatchID(t *testing.T) {
 	}
 }
 
-func TestProjectCWDIncludesSubtree(t *testing.T) {
+func TestProjectCWDUseDescendants(t *testing.T) {
 	home := util.HomeDir()
 	if home == "" {
 		t.Skip("no home dir")
 	}
-	if !util.ProjectCWDIncludesSubtree(home) {
-		t.Fatal("home should include subtree")
+	if util.ProjectCWDUseDescendants(home) {
+		t.Fatal("home should not use descendant matching")
 	}
-	if util.ProjectCWDIncludesSubtree(filepath.Join(home, "proj")) {
-		t.Fatal("non-home cwd should be exact match only")
+	if !util.ProjectCWDUseDescendants(filepath.Join(home, "proj")) {
+		t.Fatal("project dir should include descendant sessions")
 	}
 }
