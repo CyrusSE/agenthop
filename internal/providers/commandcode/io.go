@@ -57,7 +57,7 @@ func summarizeCCFile(path, providerID string) (model.Summary, error) {
 	id := strings.TrimSuffix(filepath.Base(path), ".jsonl")
 	encoded := filepath.Base(filepath.Dir(path))
 	project := util.DecodeClaudeProjectPath(encoded)
-	var title string
+	picker := util.NewTitlePicker(80)
 	var msgCount int
 	var first, last time.Time
 	_ = util.ReadJSONLLines(path, 0, func(line []byte) error {
@@ -77,14 +77,12 @@ func summarizeCCFile(path, providerID string) (model.Summary, error) {
 			first = ts
 		}
 		last = ts
-		if title == "" && row.Role == "user" {
-			title = util.FirstUserSnippet(contentToString(row.Content), 80)
+		if row.Role == "user" {
+			picker.Note(contentToString(row.Content))
 		}
 		return nil
 	})
-	if title == "" {
-		title = "(no title)"
-	}
+	title := picker.TitleOr("(no title)")
 	return model.Summary{
 		ID: id, Provider: providerID, ProjectPath: project, Title: title,
 		CreatedAt: first, UpdatedAt: last, MessageCount: msgCount,

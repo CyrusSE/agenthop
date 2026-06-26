@@ -90,21 +90,14 @@ func (p *Provider) Discover(ctx context.Context, opts provider.DiscoverOpts) ([]
 	return out, nil
 }
 
-func cursorSkipTitleText(text string) bool {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return true
+func polishCursorStoredTitle(t string) string {
+	if polished, ok := util.UserTitleFromText(t); ok {
+		return polished
 	}
-	for _, prefix := range []string{
-		"<user_query>",
-		"<system_reminder>",
-		"<agent_transcripts>",
-	} {
-		if strings.HasPrefix(text, prefix) {
-			return true
-		}
+	if util.IsWeakStoredTitle(t) {
+		return ""
 	}
-	return false
+	return util.FirstUserSnippet(t, 80)
 }
 
 func (p *Provider) summarizeStore(path string) (model.Summary, error) {
@@ -131,7 +124,9 @@ func (p *Provider) summarizeStore(path string) (model.Summary, error) {
 				var meta map[string]any
 				if json.Unmarshal(v, &meta) == nil {
 					if t, _ := meta["title"].(string); t != "" {
-						title = t
+						if polished := polishCursorStoredTitle(t); polished != "" {
+							title = polished
+						}
 					}
 				}
 			}
@@ -159,7 +154,7 @@ func (p *Provider) summarizeTranscript(path string) (model.Summary, error) {
 	id := strings.TrimSuffix(filepath.Base(path), ".jsonl")
 	encoded := filepath.Base(filepath.Dir(filepath.Dir(path)))
 	project := util.DecodeCursorProjectPath(encoded)
-	var title string
+	picker := util.NewTitlePicker(80)
 	var msgCount int
 	_ = util.ReadJSONLLines(path, 0, func(line []byte) error {
 		var row map[string]any
@@ -180,11 +175,12 @@ func (p *Provider) summarizeTranscript(path string) (model.Summary, error) {
 			return nil
 		}
 		msgCount++
-		if title == "" && role == "user" && !cursorSkipTitleText(text) {
-			title = util.FirstUserSnippet(text, 80)
+		if role == "user" {
+			picker.Note(text)
 		}
 		return nil
 	})
+	title := picker.Title()
 	if title == "" {
 		_ = util.ReadJSONLLines(path, 40, func(line []byte) error {
 			var row map[string]any
@@ -192,12 +188,15 @@ func (p *Provider) summarizeTranscript(path string) (model.Summary, error) {
 				return nil
 			}
 			text := extractCursorMessage(row)
-			if text != "" && !cursorSkipTitleText(text) {
-				title = util.FirstUserSnippet(text, 80)
-				return io.EOF
+			if text != "" {
+				picker.Note(text)
+				if picker.Title() != "" {
+					return io.EOF
+				}
 			}
 			return nil
 		})
+		title = picker.Title()
 	}
 	if title == "" && project != "" {
 		title = util.FirstUserSnippet(util.TildePath(project), 80)

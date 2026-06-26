@@ -70,6 +70,9 @@ func (p *Provider) Discover(ctx context.Context, opts provider.DiscoverOpts) ([]
 		}
 		var msgCount int
 		_ = db.QueryRow(`SELECT COUNT(*) FROM message WHERE session_id = ?`, id).Scan(&msgCount)
+		if t := util.PickStoredOrMessages(title, p.opencodeUserLines(db, id)); t != "" {
+			title = t
+		}
 		if title == "" {
 			title = "(opencode session)"
 		}
@@ -152,6 +155,29 @@ func (p *Provider) Load(ctx context.Context, ref provider.SessionRef) (*model.Co
 	}
 	conv.MessageCount = len(conv.Messages)
 	return conv, nil
+}
+
+func (p *Provider) opencodeUserLines(db *sql.DB, sessionID string) []string {
+	rows, err := db.Query(`SELECT id, data FROM message WHERE session_id = ? ORDER BY time_created LIMIT 40`, sessionID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var lines []string
+	for rows.Next() {
+		var msgID, data string
+		if rows.Scan(&msgID, &data) != nil {
+			continue
+		}
+		var md ocMessageData
+		if json.Unmarshal([]byte(data), &md) != nil || md.Role != "user" {
+			continue
+		}
+		if text := p.messageText(db, msgID); text != "" {
+			lines = append(lines, text)
+		}
+	}
+	return lines
 }
 
 func (p *Provider) messageText(db *sql.DB, messageID string) string {

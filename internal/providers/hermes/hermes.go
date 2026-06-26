@@ -59,6 +59,9 @@ func (p *Provider) Discover(ctx context.Context, opts provider.DiscoverOpts) ([]
 		if rows.Scan(&id, &title, &started, &msgCount) != nil {
 			continue
 		}
+		if t := util.PickStoredOrMessages(title, hermesUserLines(db, id)); t != "" {
+			title = t
+		}
 		if title == "" {
 			title = "(hermes session)"
 		}
@@ -155,4 +158,20 @@ func (p *Provider) Write(ctx context.Context, conv *model.Conversation, opts pro
 
 func (p *Provider) ResumeCommand(r provider.WriteResult) string {
 	return "hermes --session " + r.SessionID
+}
+
+func hermesUserLines(db *sql.DB, sessionID string) []string {
+	rows, err := db.Query(`SELECT content FROM messages WHERE session_id = ? AND role = 'user' ORDER BY id LIMIT 40`, sessionID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var lines []string
+	for rows.Next() {
+		var content string
+		if rows.Scan(&content) == nil && content != "" {
+			lines = append(lines, content)
+		}
+	}
+	return lines
 }

@@ -98,28 +98,7 @@ func codexPayload(row map[string]any) map[string]any {
 }
 
 func codexSkipUserText(text string) bool {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return true
-	}
-	for _, prefix := range []string{
-		"<environment_context>",
-		"<skill>",
-		"# AGENTS.md",
-		"<INSTRUCTIONS>",
-		"<permissions instructions>",
-		"<collaboration_mode>",
-		"<skills_instructions>",
-		"Read HEARTBEAT.md",
-		"You are being used as the model planner",
-		"Sender (untrusted metadata)",
-		"The following is the Codex agent history",
-	} {
-		if strings.HasPrefix(text, prefix) {
-			return true
-		}
-	}
-	return false
+	return util.SkipUserMessage(text)
 }
 
 func codexTextFromContent(content any) string {
@@ -168,18 +147,16 @@ func codexApplyMeta(row map[string]any, id, project *string) {
 	}
 }
 
-func codexNoteUserText(text string, title *string, msgCount *int) {
+func codexNoteUserText(text string, picker *util.TitlePicker, msgCount *int) {
 	text = strings.TrimSpace(text)
-	if text == "" {
+	if text == "" || util.SkipUserMessage(text) {
 		return
 	}
 	*msgCount++
-	if *title == "" && !codexSkipUserText(text) {
-		*title = util.FirstUserSnippet(text, 80)
-	}
+	picker.Note(text)
 }
 
-func codexApplyRow(row map[string]any, id, project, title *string, msgCount *int) {
+func codexApplyRow(row map[string]any, id, project *string, picker *util.TitlePicker, msgCount *int) {
 	codexApplyMeta(row, id, project)
 	switch t, _ := row["type"].(string); t {
 	case "event_msg":
@@ -187,7 +164,7 @@ func codexApplyRow(row map[string]any, id, project, title *string, msgCount *int
 			role, _ := em["role"].(string)
 			text, _ := em["message"].(string)
 			if role == "user" {
-				codexNoteUserText(text, title, msgCount)
+				codexNoteUserText(text, picker, msgCount)
 			} else if role == "assistant" {
 				if text != "" {
 					*msgCount++
@@ -198,7 +175,7 @@ func codexApplyRow(row map[string]any, id, project, title *string, msgCount *int
 		p := codexPayload(row)
 		switch pt, _ := p["type"].(string); pt {
 		case "user_message":
-			codexNoteUserText(stringField(p, "message"), title, msgCount)
+			codexNoteUserText(stringField(p, "message"), picker, msgCount)
 		}
 	case "response_item":
 		p := codexPayload(row)
@@ -208,7 +185,7 @@ func codexApplyRow(row map[string]any, id, project, title *string, msgCount *int
 		role, _ := p["role"].(string)
 		text := codexTextFromContent(p["content"])
 		if role == "user" {
-			codexNoteUserText(text, title, msgCount)
+			codexNoteUserText(text, picker, msgCount)
 		} else if role == "assistant" && text != "" {
 			*msgCount++
 		}
@@ -241,7 +218,7 @@ func (p *Provider) summarizeFile(path string) (model.Summary, error) {
 		return model.Summary{}, err
 	}
 	id := sessionIDFromRollout(path)
-	var title string
+	picker := util.NewTitlePicker(80)
 	var msgCount int
 	var first, last time.Time
 	var project string
@@ -250,7 +227,7 @@ func (p *Provider) summarizeFile(path string) (model.Summary, error) {
 		if json.Unmarshal(line, &row) != nil {
 			return nil
 		}
-		codexApplyRow(row, &id, &project, &title, &msgCount)
+		codexApplyRow(row, &id, &project, picker, &msgCount)
 		return nil
 	})
 	tail, _ := util.TailJSONLLines(path, 5)
@@ -269,6 +246,7 @@ func (p *Provider) summarizeFile(path string) (model.Summary, error) {
 	if last.IsZero() {
 		last = st.ModTime()
 	}
+	title := picker.Title()
 	if title == "" {
 		if project != "" {
 			title = util.FirstUserSnippet(util.TildePath(project), 80)
@@ -335,12 +313,13 @@ func (p *Provider) Load(ctx context.Context, ref provider.SessionRef) (*model.Co
 	conv.MessageCount = len(conv.Messages)
 	conv.CreatedAt = conv.Messages[0].Timestamp
 	conv.UpdatedAt = conv.Messages[len(conv.Messages)-1].Timestamp
+	picker := util.NewTitlePicker(80)
 	for _, m := range conv.Messages {
-		if m.Role == model.RoleUser && m.PlainText() != "" && !codexSkipUserText(m.PlainText()) {
-			conv.Title = util.FirstUserSnippet(m.PlainText(), 80)
-			break
+		if m.Role == model.RoleUser {
+			picker.Note(m.PlainText())
 		}
 	}
+	conv.Title = picker.Title()
 	_ = st
 	return conv, nil
 }
