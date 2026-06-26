@@ -32,7 +32,7 @@ You hit a rate limit mid-task, or you want a different model for the next step. 
 
 | | What you get |
 |---|---|
-| **Browse** | Unified session list across agents, filtered by cwd or all projects |
+| **Browse** | Unified session list across agents, filtered by **here** (this folder) or **everywhere** |
 | **Preview** | Read conversation history before you migrate |
 | **Migrate** | One command (or TUI flow) to hop a session to another provider |
 | **Resume** | Copy or print the exact resume command for the target agent |
@@ -70,8 +70,10 @@ agenthop
 **2. Or use the CLI:**
 
 ```bash
-# Sessions in the current directory (and subfolders)
+# Sessions for the current directory only (--cwd uses exact path match)
 agenthop list --cwd
+
+# At ~, --cwd lists sessions under home projects (~/Documents/..., not global)
 
 # All indexed sessions (default: no limit)
 agenthop list
@@ -101,11 +103,11 @@ agenthop list --refresh        # rescan then list
 
 ## TUI
 
-The default interface is a Codex-style **session browser**: one list for all agents, scoped to your cwd by default.
+The default interface is a Codex-style **session browser**: one list for all agents, scoped to **here** by default.
 
 ```
    ╭──────◆──────╮
-   │  agenthop   │     cwd  all
+   │  agenthop   │     here  everywhere
    ╰─────────────╯
   session browser    ~/projects/my-app
 
@@ -113,13 +115,23 @@ The default interface is a Codex-style **session browser**: one list for all age
   1h ago  Refactor API           Codex · 8a2f1c3e · …/my-app
   …
 
-  ↑↓ navigate · enter actions · w cwd · a all · [/] page · p agent · r refresh
+  ↑↓ navigate · enter actions · w here · a everywhere · [/] page · p agent · r refresh
 ```
+
+### Here vs everywhere
+
+| Where you run `agenthop` | **Here** (`w`) shows |
+|--------------------------|----------------------|
+| A project directory (e.g. `~/projects/my-app`) | Sessions whose `project_path` is **exactly** that folder — not subfolders like `my-app/web` |
+| Home (`~`) | Sessions in projects **under** home (`~/Documents/...`, etc.) — excludes loose `~`-only tags |
+| **Everywhere** (`a`) | All indexed sessions, any path |
+
+`list --cwd` follows the same rules as **here** in the TUI.
 
 | Key | Action |
 |-----|--------|
 | `Enter` | Open **actions** menu for the selected session |
-| `w` / `a` | Toggle **cwd** (this project tree) vs **all** sessions |
+| `w` / `a` | Toggle **here** (this folder) vs **everywhere** |
 | `[` / `]` | Previous / next page (status shows `page N/M` when more sessions exist) |
 | `p` | Filter by agent provider |
 | `m` | Migrate selected session |
