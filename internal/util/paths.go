@@ -36,6 +36,25 @@ func TildePath(p string) string {
 	return strings.Replace(p, home, "~", 1)
 }
 
+// HomeDir returns the normalized user home directory, or "" if unknown.
+func HomeDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return NormalizeProjectPath(home)
+}
+
+// ProjectCWDIncludesSubtree reports whether sessions under subdirectories of cwd
+// should match a "here" filter. Only the home directory uses subtree matching.
+func ProjectCWDIncludesSubtree(cwd string) bool {
+	home := HomeDir()
+	if home == "" {
+		return false
+	}
+	return NormalizeProjectPath(cwd) == home
+}
+
 func EncodeClaudeProjectPath(absPath string) string {
 	abs, err := filepath.Abs(absPath)
 	if err != nil {

@@ -1,6 +1,7 @@
 package util_test
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/CyrusSE/agenthop/internal/util"
@@ -29,5 +30,18 @@ func TestMatchID(t *testing.T) {
 	}
 	if !util.MatchID(id, id) {
 		t.Fatal("exact match failed")
+	}
+}
+
+func TestProjectCWDIncludesSubtree(t *testing.T) {
+	home := util.HomeDir()
+	if home == "" {
+		t.Skip("no home dir")
+	}
+	if !util.ProjectCWDIncludesSubtree(home) {
+		t.Fatal("home should include subtree")
+	}
+	if util.ProjectCWDIncludesSubtree(filepath.Join(home, "proj")) {
+		t.Fatal("non-home cwd should be exact match only")
 	}
 }

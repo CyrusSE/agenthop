@@ -239,8 +239,8 @@ func TestListProjectCWDAtHome(t *testing.T) {
 		}
 	}
 	n, err := store.Count(index.ListOpts{ProjectCWD: home})
-	if err != nil || n != 1 {
-		t.Fatalf("home cwd should match exact path only: n=%d err=%v", n, err)
+	if err != nil || n != 2 {
+		t.Fatalf("home cwd should include home and subdirs: n=%d err=%v", n, err)
 	}
 	sub := filepath.Join(home, "proj")
 	n, err = store.Count(index.ListOpts{ProjectCWD: sub})

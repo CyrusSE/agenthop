@@ -15,7 +15,6 @@ import (
 	"github.com/CyrusSE/agenthop/internal/index"
 	"github.com/CyrusSE/agenthop/internal/migrate"
 	"github.com/CyrusSE/agenthop/internal/model"
-	"github.com/CyrusSE/agenthop/internal/config"
 	"github.com/CyrusSE/agenthop/internal/provider"
 	"github.com/CyrusSE/agenthop/internal/registry"
 	"github.com/CyrusSE/agenthop/internal/util"
@@ -208,11 +207,6 @@ func Run(reg *registry.Registry, idx *index.Store, engine *migrate.Engine) error
 		cwdMode = false
 	}
 	cwd = util.NormalizeProjectPath(cwd)
-	home := util.NormalizeProjectPath(config.HomeDir())
-	if cwdMode && home != "" && cwd == home {
-		// ~ matches every project path as a subtree; default to all projects instead.
-		cwdMode = false
-	}
 
 	counts, _ := idx.CountByProvider()
 	delegate := list.NewDefaultDelegate()

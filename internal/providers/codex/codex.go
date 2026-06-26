@@ -17,6 +17,9 @@ import (
 
 const ProviderID = "codex"
 
+// cap summarize scan so indexing thousands of rollout files stays practical.
+const codexSummarizeMaxLines = 500
+
 type Provider struct {
 	sessionsRoot string
 }
@@ -222,7 +225,7 @@ func (p *Provider) summarizeFile(path string) (model.Summary, error) {
 	var msgCount int
 	var first, last time.Time
 	var project string
-	_ = util.ReadJSONLLines(path, 0, func(line []byte) error {
+	_ = util.ReadJSONLLines(path, codexSummarizeMaxLines, func(line []byte) error {
 		var row map[string]any
 		if json.Unmarshal(line, &row) != nil {
 			return nil
