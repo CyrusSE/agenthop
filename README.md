@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://github.com/CyrusSE/agenthop">
-    <img src="https://github.com/CyrusSE/agenthop/raw/main/docs/assets/banner.png" alt="agenthop — hop AI coding sessions between agents" width="100%" />
+    <img src="https://github.com/CyrusSE/agenthop/raw/main/docs/assets/banner.svg" alt="agenthop — hop AI coding sessions between agents" width="100%" />
   </a>
 </p>
 
