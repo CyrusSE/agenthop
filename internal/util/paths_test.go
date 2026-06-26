@@ -33,6 +33,27 @@ func TestMatchID(t *testing.T) {
 	}
 }
 
+func TestProjectPathMatchesCWD(t *testing.T) {
+	home := util.HomeDir()
+	if home == "" {
+		t.Skip("no home dir")
+	}
+	proj := filepath.Join(home, "proj")
+	sub := filepath.Join(proj, "sub")
+	if util.ProjectPathMatchesCWD(home, home) {
+		t.Fatal("exact home path should not match home filter")
+	}
+	if !util.ProjectPathMatchesCWD(proj, home) {
+		t.Fatal("project under home should match home filter")
+	}
+	if !util.ProjectPathMatchesCWD(sub, proj) {
+		t.Fatal("subdir should match project filter")
+	}
+	if util.ProjectPathMatchesCWD("/other", proj) {
+		t.Fatal("unrelated path should not match")
+	}
+}
+
 func TestProjectCWDUseDescendants(t *testing.T) {
 	home := util.HomeDir()
 	if home == "" {

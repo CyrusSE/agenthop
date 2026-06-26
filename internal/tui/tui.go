@@ -295,6 +295,11 @@ func (m modelState) Init() tea.Cmd {
 }
 
 func dispatchPageLoad(m modelState) (modelState, tea.Cmd) {
+	if m.cwdMode {
+		if wd, err := os.Getwd(); err == nil {
+			m.cwd = util.NormalizeProjectPath(wd)
+		}
+	}
 	m.pageGen++
 	m.loading = true
 	return m, tea.Batch(m.spinner.Tick, loadSessionsPageCmd(m, m.pageGen))
@@ -540,6 +545,9 @@ func (m modelState) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "w":
+			if wd, err := os.Getwd(); err == nil {
+				m.cwd = util.NormalizeProjectPath(wd)
+			}
 			if !m.cwdMode {
 				m.cwdMode = true
 				m.pageOffset = 0
@@ -547,7 +555,10 @@ func (m modelState) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m, cmd = dispatchPageLoad(m)
 				return m, cmd
 			}
-			return m, nil
+			m.pageOffset = 0
+			var cmd tea.Cmd
+			m, cmd = dispatchPageLoad(m)
+			return m, cmd
 		case "a":
 			if m.cwdMode {
 				m.cwdMode = false
@@ -711,7 +722,11 @@ func (m *modelState) updateStatusLine() {
 	}
 	filter := "everywhere"
 	if m.cwdMode {
-		filter = "here"
+		if util.HomeDir() != "" && m.cwd == util.HomeDir() {
+			filter = "here (home projects)"
+		} else {
+			filter = "here"
+		}
 	}
 	prov := "all agents"
 	if m.providerFilter != "" {
