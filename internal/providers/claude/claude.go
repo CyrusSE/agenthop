@@ -78,6 +78,7 @@ type claudeLine struct {
 	SessionID string `json:"sessionId"`
 	Timestamp string `json:"timestamp"`
 	UUID      string `json:"uuid"`
+	IsMeta    bool   `json:"isMeta"`
 	Message   *struct {
 		Role    string `json:"role"`
 		Content any    `json:"content"`
@@ -93,7 +94,7 @@ func (p *Provider) summarizeFile(path string) (model.Summary, error) {
 	id := strings.TrimSuffix(base, ".jsonl")
 	encoded := filepath.Base(filepath.Dir(path))
 	project := util.DecodeClaudeProjectPath(encoded)
-	var title string
+	var title, slashFallback string
 	var msgCount int
 	var first, last time.Time
 	_ = util.ReadJSONLLines(path, 0, func(line []byte) error {
@@ -110,20 +111,32 @@ func (p *Provider) summarizeFile(path string) (model.Summary, error) {
 		if row.Message == nil {
 			return nil
 		}
+		if row.IsMeta {
+			return nil
+		}
 		msgCount++
 		ts := util.ParseTime(row.Timestamp)
 		if first.IsZero() {
 			first = ts
 		}
 		last = ts
-		if title == "" && row.Message.Role == "user" {
+		if row.Message.Role == "user" {
 			text := contentString(row.Message.Content)
-			if !isNoiseTitle(text) {
-				title = util.FirstUserSnippet(text, 80)
+			if t, ok := claudeUserTitle(text); ok {
+				if strings.HasPrefix(strings.TrimSpace(t), "/") {
+					if slashFallback == "" {
+						slashFallback = t
+					}
+				} else if title == "" {
+					title = t
+				}
 			}
 		}
 		return nil
 	})
+	if title == "" {
+		title = slashFallback
+	}
 	if title == "" {
 		title = "(no title)"
 	}
@@ -142,10 +155,75 @@ func isNoiseTitle(s string) bool {
 	if strings.HasPrefix(s, "<local-command-caveat>") {
 		return true
 	}
-	if strings.HasPrefix(s, "<command-message>") {
+	if strings.HasPrefix(s, "<command-message>") || strings.HasPrefix(s, "<command-name>") {
+		return true
+	}
+	if strings.Contains(s, "<command-message>") || strings.Contains(s, "<command-name>") {
 		return true
 	}
 	return false
+}
+
+// claudeUserTitle turns a Claude Code user message into a display title.
+// Returns ok=false when the message should be skipped (noise / meta injection).
+func claudeUserTitle(text string) (string, bool) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", false
+	}
+	if strings.HasPrefix(text, "<local-command-caveat>") {
+		return "", false
+	}
+	if strings.HasPrefix(text, "<local-command-stdout>") {
+		return "", false
+	}
+	if strings.HasPrefix(text, "<task-notification>") {
+		return "", false
+	}
+	if name := extractXMLTag(text, "command-name"); name != "" {
+		name = strings.TrimSpace(name)
+		if !strings.HasPrefix(name, "/") {
+			name = "/" + name
+		}
+		if isThinSlashTitle(name) {
+			return "", false
+		}
+		return util.FirstUserSnippet(name, 80), true
+	}
+	if msg := extractXMLTag(text, "command-message"); msg != "" {
+		cmd := "/" + strings.TrimSpace(msg)
+		if isThinSlashTitle(cmd) {
+			return "", false
+		}
+		return util.FirstUserSnippet(cmd, 80), true
+	}
+	return util.FirstUserSnippet(text, 80), true
+}
+
+// ponytail: skip Claude UI slash cmds that aren't session topics
+func isThinSlashTitle(cmd string) bool {
+	cmd = strings.ToLower(strings.Fields(strings.TrimSpace(cmd))[0])
+	switch cmd {
+	case "/model", "/login", "/effort", "/copy":
+		return true
+	default:
+		return false
+	}
+}
+
+func extractXMLTag(s, tag string) string {
+	open := "<" + tag + ">"
+	close := "</" + tag + ">"
+	i := strings.Index(s, open)
+	if i < 0 {
+		return ""
+	}
+	i += len(open)
+	j := strings.Index(s[i:], close)
+	if j < 0 {
+		return ""
+	}
+	return s[i : i+j]
 }
 
 func contentString(c any) string {
@@ -211,11 +289,24 @@ func (p *Provider) Load(ctx context.Context, ref provider.SessionRef) (*model.Co
 	conv.CreatedAt = conv.Messages[0].Timestamp
 	conv.UpdatedAt = conv.Messages[len(conv.Messages)-1].Timestamp
 	if conv.Title == "" {
+		var slashFallback string
 		for _, m := range conv.Messages {
-			if m.Role == model.RoleUser && m.PlainText() != "" {
-				conv.Title = util.FirstUserSnippet(m.PlainText(), 80)
-				break
+			if m.Role != model.RoleUser {
+				continue
 			}
+			if t, ok := claudeUserTitle(m.PlainText()); ok {
+				if strings.HasPrefix(strings.TrimSpace(t), "/") {
+					if slashFallback == "" {
+						slashFallback = t
+					}
+				} else {
+					conv.Title = t
+					break
+				}
+			}
+		}
+		if conv.Title == "" {
+			conv.Title = slashFallback
 		}
 	}
 	_ = st

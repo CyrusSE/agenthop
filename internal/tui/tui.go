@@ -85,7 +85,7 @@ func (i sessionItem) Title() string {
 			title = "(untitled)"
 		}
 	} else {
-		title = truncate(title, 40)
+		title = truncate(title, 68)
 	}
 	rel := mutedStyle.Render(util.FormatRelative(i.summary.UpdatedAt))
 	return rel + "  " + title

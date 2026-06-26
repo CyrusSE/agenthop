@@ -138,7 +138,7 @@ type ListOpts struct {
 	Provider      string
 	ProjectFilter string
 	ProjectExact  string
-	ProjectCWD    string // exact path or any session under this directory
+	ProjectCWD    string // sessions whose project_path equals this directory exactly
 	Limit         int
 	Offset        int
 	Query         string

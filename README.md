@@ -184,7 +184,7 @@ git clone https://github.com/CyrusSE/agenthop.git
 cd agenthop
 make build test      # compile + unit tests
 ./scripts/smoke.sh   # integration smoke test
-make install         # install to ~/go/bin or GOBIN
+make install         # go install + copy to ~/.local/bin (on PATH)
 ```
 
 Contributing: [CONTRIBUTING.md](CONTRIBUTING.md) · Provider guide: [docs/adding-a-provider.md](docs/adding-a-provider.md)
