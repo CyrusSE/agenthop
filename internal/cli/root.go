@@ -72,7 +72,7 @@ func (a *App) ensureIndex(ctx context.Context, providerFilter string, refresh bo
 			if counts[registry.NormalizeID(providerFilter)] > 0 {
 				return nil
 			}
-		} else {
+		} else if !index.AnyInstalledUnindexed(a.Registry, a.Index) {
 			total := 0
 			for _, n := range counts {
 				total += n
@@ -311,6 +311,9 @@ func (a *App) providersCmd() *cobra.Command {
 		},
 	}
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		if index.AnyInstalledUnindexed(a.Registry, a.Index) {
+			_, _ = index.UpdateIncremental(cmd.Context(), a.Registry, a.Index, "")
+		}
 		counts, _ := a.Index.CountByProvider()
 		for _, p := range a.Registry.All() {
 			inst := "stub"

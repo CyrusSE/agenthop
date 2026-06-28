@@ -376,6 +376,20 @@ func (s *Store) NeedsRefresh(providerID string, storagePath string, mtime int64)
 	return existing != mtime, nil
 }
 
+// AnyInstalledUnindexed reports whether an installed provider has no sessions in the index.
+func AnyInstalledUnindexed(reg *registry.Registry, store *Store) bool {
+	counts, err := store.CountByProvider()
+	if err != nil {
+		return true
+	}
+	for _, p := range reg.Installed() {
+		if counts[p.ID()] == 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func Rebuild(ctx context.Context, reg *registry.Registry, store *Store, providerFilter string) (int, error) {
 	if providerFilter != "" {
 		if _, err := store.db.Exec(`DELETE FROM sessions WHERE provider = ?`, providerFilter); err != nil {

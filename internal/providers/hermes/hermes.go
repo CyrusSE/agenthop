@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/CyrusSE/agenthop/internal/config"
@@ -38,13 +39,17 @@ func (p *Provider) DefaultPaths() []provider.PathSpec {
 	return []provider.PathSpec{{Label: "state.db", Path: p.dbPath, Env: "HERMES_HOME"}}
 }
 
+func (p *Provider) openRO() (*sql.DB, error) {
+	return sql.Open("sqlite", p.dbPath+"?mode=ro&_pragma=busy_timeout(5000)")
+}
+
 func (p *Provider) Discover(ctx context.Context, opts provider.DiscoverOpts) ([]model.Summary, error) {
-	db, err := sql.Open("sqlite", p.dbPath+"?mode=ro")
+	db, err := p.openRO()
 	if err != nil {
 		return nil, err
 	}
 	defer db.Close()
-	rows, err := db.Query(`SELECT id, title, started_at, message_count FROM sessions ORDER BY started_at DESC`)
+	rows, err := db.Query(`SELECT id, title, started_at, message_count, cwd FROM sessions WHERE archived = 0 ORDER BY started_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -53,21 +58,33 @@ func (p *Provider) Discover(ctx context.Context, opts provider.DiscoverOpts) ([]
 	mtime := st.ModTime().Unix()
 	var out []model.Summary
 	for rows.Next() {
-		var id, title string
+		var id string
+		var title, cwd sql.NullString
 		var started float64
 		var msgCount int
-		if rows.Scan(&id, &title, &started, &msgCount) != nil {
+		if err := rows.Scan(&id, &title, &started, &msgCount, &cwd); err != nil {
 			continue
 		}
-		if t := util.PickStoredOrMessages(title, hermesUserLines(db, id)); t != "" {
-			title = t
+		projectPath := ""
+		if cwd.Valid {
+			projectPath = cwd.String
 		}
-		if title == "" {
-			title = "(hermes session)"
+		if opts.ProjectFilter != "" && projectPath != "" && !strings.Contains(projectPath, opts.ProjectFilter) {
+			continue
+		}
+		titleStr := ""
+		if title.Valid {
+			titleStr = title.String
+		}
+		if t := util.PickStoredOrMessages(titleStr, hermesUserLines(db, id)); t != "" {
+			titleStr = t
+		}
+		if titleStr == "" {
+			titleStr = "(hermes session)"
 		}
 		ts := time.Unix(int64(started), 0)
 		out = append(out, model.Summary{
-			ID: id, Provider: ProviderID, Title: title,
+			ID: id, Provider: ProviderID, ProjectPath: projectPath, Title: titleStr,
 			CreatedAt: ts, UpdatedAt: ts, MessageCount: msgCount,
 			StoragePath: p.dbPath + "#" + id, SourceMtime: mtime,
 		})
@@ -75,43 +92,63 @@ func (p *Provider) Discover(ctx context.Context, opts provider.DiscoverOpts) ([]
 			break
 		}
 	}
-	return out, nil
+	return out, rows.Err()
 }
 
 func (p *Provider) Load(ctx context.Context, ref provider.SessionRef) (*model.Conversation, error) {
-	db, err := sql.Open("sqlite", p.dbPath+"?mode=ro")
+	db, err := p.openRO()
 	if err != nil {
 		return nil, err
 	}
 	defer db.Close()
-	var title string
+	var title sql.NullString
 	var started float64
-	err = db.QueryRow(`SELECT title, started_at FROM sessions WHERE id = ?`, ref.ID).Scan(&title, &started)
+	var cwd sql.NullString
+	err = db.QueryRow(`SELECT title, started_at, cwd FROM sessions WHERE id = ?`, ref.ID).Scan(&title, &started, &cwd)
 	if err != nil {
 		return nil, provider.ErrNotFound
 	}
+	titleStr := ""
+	if title.Valid {
+		titleStr = title.String
+	}
+	projectPath := ref.ProjectPath
+	if projectPath == "" && cwd.Valid {
+		projectPath = cwd.String
+	}
 	conv := &model.Conversation{
-		ID: ref.ID, Provider: ProviderID, Title: title,
+		ID: ref.ID, Provider: ProviderID, Title: titleStr, ProjectPath: projectPath,
 		CreatedAt: time.Unix(int64(started), 0), StoragePath: p.dbPath + "#" + ref.ID,
 	}
-	rows, err := db.Query(`SELECT role, content FROM messages WHERE session_id = ? ORDER BY id`, ref.ID)
+	rows, err := db.Query(`SELECT role, content FROM messages WHERE session_id = ? AND active = 1 ORDER BY id`, ref.ID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var role, content string
+		var role string
+		var content sql.NullString
 		if rows.Scan(&role, &content) != nil {
+			continue
+		}
+		text := ""
+		if content.Valid {
+			text = content.String
+		}
+		if text == "" {
 			continue
 		}
 		mrole := model.RoleUser
 		if role == "assistant" {
 			mrole = model.RoleAssistant
 		}
-		conv.Messages = append(conv.Messages, model.Message{Role: mrole, Content: content})
+		conv.Messages = append(conv.Messages, model.Message{Role: mrole, Content: text})
 	}
 	if len(conv.Messages) == 0 {
 		return nil, provider.ErrNotFound
+	}
+	if conv.Title == "" {
+		conv.Title = util.FirstUserSnippet(conv.Messages[0].PlainText(), 60)
 	}
 	conv.MessageCount = len(conv.Messages)
 	return conv, nil
@@ -130,7 +167,7 @@ func (p *Provider) Write(ctx context.Context, conv *model.Conversation, opts pro
 	if opts.DryRun {
 		return &provider.WriteResult{SessionID: sessionID, StoragePath: p.dbPath + "#" + sessionID, ProjectPath: conv.ProjectPath}, nil
 	}
-	db, err := sql.Open("sqlite", p.dbPath)
+	db, err := sql.Open("sqlite", p.dbPath+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, err
 	}
@@ -161,16 +198,16 @@ func (p *Provider) ResumeCommand(r provider.WriteResult) string {
 }
 
 func hermesUserLines(db *sql.DB, sessionID string) []string {
-	rows, err := db.Query(`SELECT content FROM messages WHERE session_id = ? AND role = 'user' ORDER BY id LIMIT 40`, sessionID)
+	rows, err := db.Query(`SELECT content FROM messages WHERE session_id = ? AND role = 'user' AND active = 1 ORDER BY id LIMIT 40`, sessionID)
 	if err != nil {
 		return nil
 	}
 	defer rows.Close()
 	var lines []string
 	for rows.Next() {
-		var content string
-		if rows.Scan(&content) == nil && content != "" {
-			lines = append(lines, content)
+		var content sql.NullString
+		if rows.Scan(&content) == nil && content.Valid && content.String != "" {
+			lines = append(lines, content.String)
 		}
 	}
 	return lines
