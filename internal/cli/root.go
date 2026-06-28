@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/CyrusSE/agenthop/internal/index"
 	"github.com/CyrusSE/agenthop/internal/migrate"
@@ -66,18 +67,16 @@ func (a *App) Root() *cobra.Command {
 }
 
 func (a *App) ensureIndex(ctx context.Context, providerFilter string, refresh bool) error {
+	const indexMaxAge = 5 * time.Minute
 	if !refresh {
-		counts, _ := a.Index.CountByProvider()
-		if providerFilter != "" {
-			if counts[registry.NormalizeID(providerFilter)] > 0 {
+		if providerFilter == "" {
+			if !index.NeedsIncrementalIndex(a.Registry, a.Index, indexMaxAge) {
 				return nil
 			}
-		} else if !index.AnyInstalledUnindexed(a.Registry, a.Index) {
-			total := 0
-			for _, n := range counts {
-				total += n
-			}
-			if total > 0 {
+		} else {
+			counts, _ := a.Index.CountByProvider()
+			pid := registry.NormalizeID(providerFilter)
+			if counts[pid] > 0 && !index.NeedsIncrementalIndex(a.Registry, a.Index, indexMaxAge) {
 				return nil
 			}
 		}
@@ -311,7 +310,7 @@ func (a *App) providersCmd() *cobra.Command {
 		},
 	}
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
-		if index.AnyInstalledUnindexed(a.Registry, a.Index) {
+		if index.NeedsIncrementalIndex(a.Registry, a.Index, 5*time.Minute) {
 			_, _ = index.UpdateIncremental(cmd.Context(), a.Registry, a.Index, "")
 		}
 		counts, _ := a.Index.CountByProvider()

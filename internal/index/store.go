@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -390,6 +391,82 @@ func AnyInstalledUnindexed(reg *registry.Registry, store *Store) bool {
 	return false
 }
 
+func discoverCountMetaKey(providerID string) string {
+	return "discover_unique:" + providerID
+}
+
+func uniqueSummaryIDs(summaries []model.Summary) int {
+	seen := make(map[string]struct{}, len(summaries))
+	for _, sm := range summaries {
+		seen[sm.ID] = struct{}{}
+	}
+	return len(seen)
+}
+
+// IndexMetadataMissing reports whether discover metadata has not been recorded yet.
+func IndexMetadataMissing(reg *registry.Registry, store *Store) bool {
+	for _, p := range reg.Installed() {
+		meta, _ := store.GetMeta(discoverCountMetaKey(p.ID()))
+		if meta == "" {
+			return true
+		}
+	}
+	return false
+}
+
+// IndexBehindDiscover reports whether indexed counts trail the last discover scan.
+func IndexBehindDiscover(reg *registry.Registry, store *Store) bool {
+	counts, err := store.CountByProvider()
+	if err != nil {
+		return true
+	}
+	for _, p := range reg.Installed() {
+		meta, _ := store.GetMeta(discoverCountMetaKey(p.ID()))
+		if meta == "" {
+			continue
+		}
+		expected, err := strconv.Atoi(meta)
+		if err != nil {
+			continue
+		}
+		if counts[p.ID()] < expected {
+			return true
+		}
+	}
+	return false
+}
+
+// LastUpdateStale reports whether the index has not been updated recently.
+func (s *Store) LastUpdateStale(maxAge time.Duration) bool {
+	last, _ := s.GetMeta("last_update")
+	if last == "" {
+		return true
+	}
+	t, err := time.Parse(time.RFC3339, last)
+	if err != nil {
+		return true
+	}
+	return time.Since(t) > maxAge
+}
+
+// NeedsIncrementalIndex reports whether an incremental scan should run before listing.
+func NeedsIncrementalIndex(reg *registry.Registry, store *Store, maxAge time.Duration) bool {
+	if AnyInstalledUnindexed(reg, store) {
+		return true
+	}
+	if IndexMetadataMissing(reg, store) {
+		return true
+	}
+	if IndexBehindDiscover(reg, store) {
+		return true
+	}
+	return store.LastUpdateStale(maxAge)
+}
+
+func recordDiscoverMeta(store *Store, providerID string, summaries []model.Summary) error {
+	return store.SetMeta(discoverCountMetaKey(providerID), strconv.Itoa(uniqueSummaryIDs(summaries)))
+}
+
 func Rebuild(ctx context.Context, reg *registry.Registry, store *Store, providerFilter string) (int, error) {
 	if providerFilter != "" {
 		if _, err := store.db.Exec(`DELETE FROM sessions WHERE provider = ?`, providerFilter); err != nil {
@@ -412,6 +489,7 @@ func Rebuild(ctx context.Context, reg *registry.Registry, store *Store, provider
 		if err != nil {
 			return total, fmt.Errorf("%s: %w", p.ID(), err)
 		}
+		_ = recordDiscoverMeta(store, p.ID(), summaries)
 		for _, sm := range summaries {
 			if err := store.Upsert(sm); err != nil {
 				return total, err
@@ -436,6 +514,7 @@ func UpdateIncremental(ctx context.Context, reg *registry.Registry, store *Store
 		if err != nil {
 			return total, fmt.Errorf("%s: %w", p.ID(), err)
 		}
+		_ = recordDiscoverMeta(store, p.ID(), summaries)
 		for _, sm := range summaries {
 			need, err := store.NeedsRefresh(sm.Provider, sm.StoragePath, sm.SourceMtime)
 			if err != nil || need {

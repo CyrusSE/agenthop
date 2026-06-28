@@ -11,6 +11,7 @@ import (
 	"github.com/CyrusSE/agenthop/internal/config"
 	"github.com/CyrusSE/agenthop/internal/index"
 	"github.com/CyrusSE/agenthop/internal/model"
+	"github.com/CyrusSE/agenthop/internal/registry"
 )
 
 func TestStoreUpsertList(t *testing.T) {
@@ -246,6 +247,34 @@ func TestListProjectCWDAtHome(t *testing.T) {
 	n, err = store.Count(index.ListOpts{ProjectCWD: sub})
 	if err != nil || n != 1 {
 		t.Fatalf("project cwd should match project path: n=%d err=%v", n, err)
+	}
+}
+
+func TestIndexBehindDiscoverAndStale(t *testing.T) {
+	dir := t.TempDir()
+	store, err := index.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	now := time.Now()
+	_ = store.Upsert(model.Summary{
+		ID: "a", Provider: "codex", Title: "a",
+		UpdatedAt: now, StoragePath: "/tmp/a", SourceMtime: now.Unix(),
+	})
+	_ = store.SetMeta("discover_unique:codex", "3")
+
+	reg := registry.New()
+	if !index.IndexBehindDiscover(reg, store) {
+		t.Fatal("expected behind discover")
+	}
+	if !store.LastUpdateStale(time.Minute) {
+		t.Fatal("missing last_update should be stale")
+	}
+	_ = store.SetMeta("last_update", time.Now().UTC().Format(time.RFC3339))
+	if store.LastUpdateStale(time.Minute) {
+		t.Fatal("fresh last_update should not be stale")
 	}
 }
 

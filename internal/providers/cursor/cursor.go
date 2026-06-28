@@ -107,7 +107,7 @@ func (p *Provider) summarizeStore(path string) (model.Summary, error) {
 	}
 	id := filepath.Base(filepath.Dir(path))
 	projectHash := filepath.Base(filepath.Dir(filepath.Dir(path)))
-	db, err := sql.Open("sqlite", path+"?mode=ro")
+	db, err := sql.Open("sqlite", path+"?mode=ro&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return model.Summary{}, err
 	}
@@ -269,7 +269,7 @@ func extractCursorMessage(row map[string]any) string {
 }
 
 func (p *Provider) loadStore(path, id string) (*model.Conversation, error) {
-	db, err := sql.Open("sqlite", path+"?mode=ro")
+	db, err := sql.Open("sqlite", path+"?mode=ro&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, err
 	}

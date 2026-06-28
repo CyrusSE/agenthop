@@ -42,7 +42,7 @@ func (p *Provider) DefaultPaths() []provider.PathSpec {
 }
 
 func (p *Provider) openRO() (*sql.DB, error) {
-	return sql.Open("sqlite", p.dbPath+"?mode=ro")
+	return sql.Open("sqlite", p.dbPath+"?mode=ro&_pragma=busy_timeout(5000)")
 }
 
 func (p *Provider) Discover(ctx context.Context, opts provider.DiscoverOpts) ([]model.Summary, error) {
@@ -60,24 +60,33 @@ func (p *Provider) Discover(ctx context.Context, opts provider.DiscoverOpts) ([]
 	mtime := st.ModTime().Unix()
 	var out []model.Summary
 	for rows.Next() {
-		var id, dir, title string
+		var id string
+		var dir, title sql.NullString
 		var created, updated int64
 		if err := rows.Scan(&id, &dir, &title, &created, &updated); err != nil {
 			continue
 		}
-		if opts.ProjectFilter != "" && !strings.Contains(dir, opts.ProjectFilter) {
+		dirStr := ""
+		if dir.Valid {
+			dirStr = dir.String
+		}
+		if opts.ProjectFilter != "" && dirStr != "" && !strings.Contains(dirStr, opts.ProjectFilter) {
 			continue
 		}
 		var msgCount int
 		_ = db.QueryRow(`SELECT COUNT(*) FROM message WHERE session_id = ?`, id).Scan(&msgCount)
-		if t := util.PickStoredOrMessages(title, p.opencodeUserLines(db, id)); t != "" {
-			title = t
+		titleStr := ""
+		if title.Valid {
+			titleStr = title.String
 		}
-		if title == "" {
-			title = "(opencode session)"
+		if t := util.PickStoredOrMessages(titleStr, p.opencodeUserLines(db, id)); t != "" {
+			titleStr = t
+		}
+		if titleStr == "" {
+			titleStr = "(opencode session)"
 		}
 		out = append(out, model.Summary{
-			ID: id, Provider: ProviderID, ProjectPath: dir, Title: title,
+			ID: id, Provider: ProviderID, ProjectPath: dirStr, Title: titleStr,
 			CreatedAt: time.UnixMilli(created), UpdatedAt: time.UnixMilli(updated),
 			MessageCount: msgCount, StoragePath: p.dbPath + "#" + id, SourceMtime: mtime,
 		})
@@ -107,15 +116,23 @@ func (p *Provider) Load(ctx context.Context, ref provider.SessionRef) (*model.Co
 	}
 	defer db.Close()
 	id := ref.ID
-	var dir, title string
+	var dir, title sql.NullString
 	var created, updated int64
 	err = db.QueryRow(`SELECT directory, title, time_created, time_updated FROM session WHERE id = ?`, id).
 		Scan(&dir, &title, &created, &updated)
 	if err != nil {
 		return nil, provider.ErrNotFound
 	}
+	dirStr := ""
+	if dir.Valid {
+		dirStr = dir.String
+	}
+	titleStr := ""
+	if title.Valid {
+		titleStr = title.String
+	}
 	conv := &model.Conversation{
-		ID: id, Provider: ProviderID, ProjectPath: dir, Title: title,
+		ID: id, Provider: ProviderID, ProjectPath: dirStr, Title: titleStr,
 		CreatedAt: time.UnixMilli(created), UpdatedAt: time.UnixMilli(updated),
 		StoragePath: p.dbPath + "#" + id,
 	}
